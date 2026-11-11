@@ -1260,13 +1260,20 @@ func _ai_try(url: String, model: String, key: String, messages: Array, test: boo
 					pass
 				_ai_try(url, model, key, m3, test, ag, done, st)
 				return
+			var stones := 0
+			if not PloxLevel.playability(level).is_empty():
+				stones = PloxLevel.bridge_gaps(level, cfg.i("studio_max_parts"))
+				if stones > 0:
+					st["stones"] = stones
+					print("[ai] added %d stepping stones to close the AI's gaps" % stones)
 			if PloxLevel.playability(level).is_empty():
-				pass   # finishable, just not perfect: use it
+				pass   # finishable now, use it
 			else:
 				fail.call("the AI's level still can't be finished after %d fixes: %s" % [fixes, str(probs[0]).substr(0, 220)], "", false)
 				return
 		var info := "AI, %d parts%s%s%s" % [level.parts.size(), ", 2nd try" if int(st.try) > 1 else "",
-			(", fixed %dx" % int(st.fixes)) if int(st.get("fixes", 0)) > 0 else "", ", cut off and closed" if r.finish == "length" else ""]
+			((", fixed %dx" % int(st.fixes)) if int(st.get("fixes", 0)) > 0 else "") + ((", +%d stepping stones" % int(st.stones)) if st.has("stones") else ""),
+			", cut off and closed" if r.finish == "length" else ""]
 		print("[ai] ok in %d ms: %s, '%s'" % [Time.get_ticks_msec() - int(st.t0), info, str(level.title)])
 		level["_info"] = info
 		done.call(true, level, ""))

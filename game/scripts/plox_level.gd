@@ -225,7 +225,7 @@ static func check(d: Dictionary) -> String:
 ## launches at 19 m/s (about 7.5 m up, 10 m across). Movers slide 4 m each way.
 const JUMP_UP := 1.5          # step up a normal jump can always make
 const JUMP_GAP := 4.0         # edge-to-edge gap a normal jump can always make
-const PAD_UP := 6.5
+const PAD_UP := 7.0
 const PAD_GAP := 8.5
 const MOVER_REACH := 4.0
 const STANDABLE := ["block", "ice", "bounce", "checkpoint", "mover"]
@@ -331,6 +331,69 @@ static func playability(d: Dictionary) -> Array:
 	else:
 		probs.append("The goal can't be reached from the spawn.")
 	return probs
+
+
+## Last resort when the AI's fixes still leave a gap: add small stepping stones (in the
+## level's own colours) where the path breaks, so the AI's design stays and becomes
+## finishable. Returns how many stones were added (0 if it couldn't).
+static func bridge_gaps(d: Dictionary, max_parts: int) -> int:
+	var added := 0
+	for round in 8:
+		var probs := playability(d)
+		if probs.is_empty():
+			return added
+		var parts: Array = d.parts
+		var si := _under(d.spawn, parts)
+		var gi := _under(d.goal, parts)
+		if si < 0 or gi < 0:
+			return 0
+		var feet := []
+		for p in parts:
+			feet.append(_foot(p) if STANDABLE.has(p[0]) else [])
+		var seen := {si: true}
+		var queue := [si]
+		while not queue.is_empty():
+			var i: int = queue.pop_front()
+			for j in parts.size():
+				if not seen.has(j) and not feet[j].is_empty() and _hop(parts[i], feet[i], feet[j]):
+					seen[j] = true
+					queue.append(j)
+		if seen.has(gi):
+			return added
+		# Closest unreached platform, preferring ones nearer the goal.
+		var best := INF
+		var from := -1
+		var to := -1
+		var gf: Array = feet[gi]
+		for i in seen.keys():
+			for j in parts.size():
+				if seen.has(j) or feet[j].is_empty():
+					continue
+				var cost := _gap(feet[i], feet[j]) + maxf(0.0, feet[j][4] - feet[i][4]) * 1.5 + _gap(feet[j], gf) * 0.3
+				if cost < best:
+					best = cost
+					from = i
+					to = j
+		if from < 0:
+			return 0
+		var fa: Array = feet[from]
+		var fb: Array = feet[to]
+		var a := Vector3((fa[0] + fa[1]) / 2.0, fa[4], (fa[2] + fa[3]) / 2.0)
+		var b := Vector3((fb[0] + fb[1]) / 2.0, fb[4], (fb[2] + fb[3]) / 2.0)
+		var up := b.y - a.y
+		var flat := Vector2(b.x - a.x, b.z - a.z).length()
+		var n := maxi(1, maxi(int(ceil(flat / 3.2)), int(ceil(maxf(up, 0.0) / 1.1))))
+		if parts.size() + n > max_parts:
+			return 0
+		var col: int = int(parts[from][8])
+		for k in range(1, n + 1):
+			var t := float(k) / float(n + 1)
+			var top := a.y + up * (float(k) / float(n)) if up > 0.0 else lerpf(a.y, b.y, t)
+			var px := lerpf(a.x, b.x, t)
+			var pz := lerpf(a.z, b.z, t)
+			parts.append(["block", snappedf(px, 0.1), snappedf(top - 0.3, 0.1), snappedf(pz, 0.1), 2.6, 0.6, 2.6, 0, col])
+			added += 1
+	return added if playability(d).is_empty() else 0
 
 
 ## The instructions the server gives the AI. It must answer with JSON only.

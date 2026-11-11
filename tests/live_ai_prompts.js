@@ -21,12 +21,13 @@ async function ask(c, m, t, ms = 60000) { const r = rid++; c.ws.send(JSON.string
       if (!su || !su.ok) { console.log('signup failed', JSON.stringify(su)); process.exit(1); }
       pl.ws.send(JSON.stringify({ t: 's_hello', v: 1, token: su.token, rid: rid++ }));
       await sleep(2000); used = 0;
+      const ws0 = pl.ws; setInterval(() => { if (ws0.readyState === 1) ws0.send(JSON.stringify({ t: 'ping', c: Date.now() })); }, 4000);
     }
     const t0 = Date.now();
     const r = await ask(pl, { t: 's_ai_build', prompt: p }, 's_ai_res', 340000);
     used++;
     const secs = ((Date.now() - t0) / 1000).toFixed(0);
-    if (!r) { console.log(`TIMEOUT "${p}"`); out.push({ p, ok: false }); continue; }
+    if (!r) { console.log(`TIMEOUT "${p}" inbox=` + JSON.stringify(pl.inbox.slice(-4).map(x => { const y = Object.assign({}, x); delete y.cfg; return y; })) + " open=" + pl.ws.readyState); out.push({ p, ok: false }); used = 99; continue; }
     if (!r.ok) { console.log(`FAIL "${p}" ${secs}s: ${r.why}`); out.push({ p, ok: false, why: r.why }); continue; }
     const lv = r.level, kinds = {};
     lv.parts.forEach(x => kinds[x[0]] = (kinds[x[0]] || 0) + 1);

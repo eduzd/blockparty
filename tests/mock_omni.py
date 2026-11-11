@@ -71,6 +71,9 @@ class H(BaseHTTPRequestHandler):
             else:
                 b = json.loads(json.dumps(LEVEL)); b["goal"] = [50, 30, 50]; b["parts"].append(["block", 50, 28.5, 50, 4, 1, 4, 0, 2])
                 msg["content"] = json.dumps(b)
+        elif model == "mock-gappy":
+            b = json.loads(json.dumps(LEVEL)); b["goal"] = [20, 9, -20]; b["parts"].append(["block", 20, 7.5, -20, 4, 1, 4, 0, 2])
+            msg["content"] = json.dumps(b)
         elif model == "mock-luau":
             msg["content"] = "-- Luau script\nlocal x = 1"
         elif model == "mock-empty":
