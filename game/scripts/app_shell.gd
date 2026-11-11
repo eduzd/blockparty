@@ -49,6 +49,9 @@ var _list_users: Array = []
 var _list_loaded := false
 
 
+var plux: PluxPages
+
+
 func _init(p_main: Node, p_social: SocialClient, p_state: Dictionary) -> void:
 	main = p_main
 	social = p_social
@@ -77,6 +80,8 @@ func _ready() -> void:
 	social.password_saved.connect(_on_password_saved)
 	social.account_switched.connect(func(): _mark_dirty())
 	_wire_eco()
+	plux = PluxPages.new(self)
+	social.trades_changed.connect(_mark_dirty)
 	resized.connect(_on_resized)
 	call_deferred("_rebuild")
 
@@ -227,6 +232,11 @@ func _show_current(animate: bool, direction := 0) -> void:
 			"login": node = _login_screen()
 			"shop": node = _shop_screen()
 			"item": node = _item_screen(str(top.id))
+			"store": node = plux.store_screen()
+			"pro": node = plux.pro_screen()
+			"outfits": node = plux.outfits_screen()
+			"trades": node = plux.trades_screen()
+			"trade": node = plux.new_trade_screen(str(top.uid))
 			_: node = UiKit.vbox()
 		node.set_anchors_preset(Control.PRESET_FULL_RECT)
 		bg.add_child(node)
@@ -755,7 +765,7 @@ func _profile() -> Control:
 		var me: Dictionary = social.data.me
 		var edit := UiKit.outline_button("Edit profile", "pencil", func(): push({"k": "edit"}))
 		box.add_child(UiKit.profile_header(str(social.data.name), str(social.data.username), str(social.data.bio),
-			social.is_online(), [edit], "", int(social.data.get("av", -1)), social.equipped_cards()))
+			social.is_online(), [edit], "", int(social.data.get("av", -1)), social.equipped_cards(), social.is_pro()))
 		var stats := UiKit.hbox(10)
 		stats.add_child(UiKit.stat_tile(social.data.friends.size(), "Friends", func(): push({"k": "list", "uid": social.uid, "kind": "friends"})))
 		stats.add_child(UiKit.stat_tile(int(me.get("followers", 0)), "Followers", func(): push({"k": "list", "uid": social.uid, "kind": "followers"})))
@@ -770,6 +780,16 @@ func _profile() -> Control:
 		box.add_child(ac[0])
 		ac[1].add_child(UiKit.setting_row("tag", "Avatar shop", "Hats, faces, backs and effects", "", UiKit.SKY_MEDIUM, func(): _shop_slot = ""; push({"k": "shop"})))
 		ac[1].add_child(UiKit.setting_row("cube", "My items", "Wear what you own", str(social.eco.get("inv", []).size()) if social.eco.get("inv", []).size() > 0 else "", UiKit.PINK, func(): _shop_slot = "mine"; push({"k": "shop"})))
+		ac[1].add_child(UiKit.setting_row("user-circle", "Outfits", "Save looks and switch in one tap", "", UiKit.SKY_MEDIUM, func(): push({"k": "outfits"})))
+		if social.feature("trading"):
+			var open_in := social.trades.filter(func(t): return str(t.get("status", "")) == "open" and not bool(t.get("mine", false))).size()
+			ac[1].add_child(UiKit.setting_row("arrows-right-left", "Trades", "Swap limited items with friends", str(open_in) if open_in > 0 else "", UiKit.PINK, func(): push({"k": "trades"})))
+		box.add_child(UiKit.section_title("Plux"))
+		var pc: Array = UiKit.card()
+		box.add_child(pc[0])
+		pc[1].add_child(UiKit.setting_row("sparkles", "Get Plux", "Plux packs", "", UiKit.SKY_MEDIUM, func(): push({"k": "store"})))
+		var pro_sub := "You're a member" if social.is_pro() else "Monthly Plux, a Pro badge and more"
+		pc[1].add_child(UiKit.setting_row("star", "Plux Pro", pro_sub, "", PluxPages.PRO_GOLD, func(): push({"k": "pro"})))
 		box.add_child(UiKit.section_title("People"))
 		var card: Array = UiKit.card()
 		box.add_child(card[0])
@@ -931,7 +951,10 @@ func _user_screen(w: String) -> Control:
 		if r.friend:
 			note += "  ·  Friends"
 		box.add_child(UiKit.profile_header(str(u.get("name", "Player")), str(u.get("username", "")), str(u.get("bio", "")),
-			bool(u.get("online", false)), actions, note, int(u.get("av", -1)), _eq(u)))
+			bool(u.get("online", false)), actions, note, int(u.get("av", -1)), _eq(u), bool(u.get("pro", false))))
+		if r.friend and social.feature("trading"):
+			var tb := UiKit.outline_button("Trade", "arrows-right-left", func(): plux.pick_give.clear(); plux.pick_get.clear(); plux.give_plux = 0; push({"k": "trade", "uid": w}))
+			box.add_child(UiKit.margin(tb, 16, 0, 16, 4))
 		if r.req_in:
 			var dec := UiKit.text_button("Decline request", UiKit.c("on_surface_variant"), func(): _act(social.decline(w)))
 			dec.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -1084,7 +1107,15 @@ func _chat_screen(w: String) -> Control:
 	var nm := UiKit.label(str(u.get("name", "Player")), "title_medium", UiKit.c("on_background"), false)
 	nm.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	nm.clip_text = true
-	tc.add_child(nm)
+	if bool(u.get("pro", false)):
+		var nrow := UiKit.hbox(6)
+		nrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		nrow.add_child(nm)
+		nrow.add_child(PluxPages.pro_badge(true))
+		tc.add_child(nrow)
+	else:
+		tc.add_child(nm)
 	_chat_sub = UiKit.label(_presence_text(u), "body_small", UiKit.c("on_surface_variant"), false)
 	tc.add_child(_chat_sub)
 	wh.add_child(tc)
@@ -1742,6 +1773,8 @@ func _wallet_card() -> Control:
 		actions.add_child(UiKit.small_button("Get %d" % int(social.eco.get("daily", 0)), true, _claim_daily, "sparkles"))
 	elif social.feature("shop"):
 		actions.add_child(UiKit.small_button("Shop", false, func(): push({"k": "shop"}), "tag"))
+	if social.feature("buy_plux") or social.feature("pro"):
+		actions.add_child(UiKit.icon_button("plus", func(): push({"k": "store"})))
 	h.add_child(actions)
 	card[1].add_child(UiKit.margin(h, 16, 14, 14, 14))
 	return card[0]

@@ -821,7 +821,7 @@ static func small_button(text: String, filled: bool, cb: Callable, icon_name := 
 
 ## Profile header (16/10 margin, 24dp corners, surfaceContainer, 16dp padding, 72dp
 ## avatar, name titleLarge, @username primary). `actions` sit full width below.
-static func profile_header(name: String, username: String, bio: String, online: bool, actions: Array, note := "", av: int = -1, eq: Array = []) -> Control:
+static func profile_header(name: String, username: String, bio: String, online: bool, actions: Array, note := "", av: int = -1, eq: Array = [], pro := false) -> Control:
 	var p := PanelContainer.new()
 	p.add_theme_stylebox_override("panel", pad(box(c("surface_container"), 24, c("outline_variant"), 1), 16, 16))
 	var col := vbox(0)
@@ -830,7 +830,15 @@ static func profile_header(name: String, username: String, bio: String, online: 
 	var tc := vbox(2)
 	tc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tc.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	tc.add_child(label(name, "title_large", c("on_surface")))
+	if pro:
+		var nh := hbox(8)
+		var nl := label(name, "title_large", c("on_surface"))
+		nl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		nh.add_child(nl)
+		nh.add_child(PluxPages.pro_badge())
+		tc.add_child(nh)
+	else:
+		tc.add_child(label(name, "title_large", c("on_surface")))
 	if username != "":
 		tc.add_child(label("@" + username, "body_medium", c("primary")))
 	else:

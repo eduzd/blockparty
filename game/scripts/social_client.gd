@@ -537,6 +537,13 @@ func _on_msg(msg: Dictionary) -> void:
 					if it is Dictionary:
 						shop_by_id[str(it.get("id", ""))] = it
 			eco_changed.emit()
+		"s_pro":
+			if msg.get("pro") is Dictionary:
+				eco["pro"] = msg.pro
+				if bool(msg.pro.get("active", false)):
+					plux_earned.emit(0, "pro")
+			eco_changed.emit()
+			reply.emit("s_pro_push", msg)
 		"s_plux":
 			eco.coins = int(msg.get("coins", eco.coins))
 			plux_earned.emit(int(msg.get("got", 0)), str(msg.get("why", "")))
@@ -557,7 +564,7 @@ func _on_msg(msg: Dictionary) -> void:
 					else:
 						d[w].erase("playing")
 			_touch()
-		"s_daily_res", "s_buy_res", "s_equip_res":
+		"s_daily_res", "s_buy_res", "s_equip_res", "s_outfits_res", "s_outfit_save_res", "s_outfit_del_res", "s_pro_res", "s_pro_cancel_res", "s_pro_renew_res":
 			if msg.has("coins"):
 				eco.coins = int(msg.coins)
 			if msg.t == "s_buy_res" and bool(msg.get("ok", false)):
@@ -853,6 +860,10 @@ func request(msg: Dictionary) -> bool:
 
 func feature(name: String) -> bool:
 	return bool(cfg.get("f_" + name, true))
+
+
+func is_pro() -> bool:
+	return bool(eco.get("pro", {}).get("active", false)) if eco.get("pro") is Dictionary else false
 
 
 func owns_item(id: String) -> bool:
