@@ -19,6 +19,8 @@ var games_loaded := false
 var prompt_text := ""
 var change_text := ""
 var note := ""          # last message from the builder
+var source := ""        # 0.7.2: "ai" or "quick", who built the current game
+var _busy_since := 0
 var ai_left := -1
 var ai_on := true        # false when the server says the AI builder isn't set up
 var _open_after_ai := false
@@ -51,8 +53,12 @@ func _on_reply(t: String, msg: Dictionary) -> void:
 				note = str(msg.get("why", ""))
 				if msg.get("ai_off", false):
 					ai_on = false
+				source = str(msg.get("source", "quick" if msg.get("quick", false) else "ai"))
 				if note == "":
-					note = "Built by the quick builder." if msg.get("quick", false) else "Built by the AI."
+					note = "Built by the quick builder." if source == "quick" else "Built by the AI."
+				# Say where the game came from, also when it opens straight into play.
+				s._toast(("AI built this game" if source == "ai" else "Quick builder made this (the AI couldn't)") if _open_after_ai
+					else ("AI changed your game" if source == "ai" else "Quick builder changed it (the AI couldn't)"))
 				change_text = ""
 				if _open_after_ai:
 					_open_after_ai = false
@@ -111,6 +117,8 @@ func _on_reply(t: String, msg: Dictionary) -> void:
 				gid = str(card.gid)
 				status = str(card.get("status", "draft"))
 				sel = -1
+				source = ""
+				note = ""
 				undo.clear()
 				note = ""
 				s.push({"k": "studio_edit"})
@@ -141,7 +149,17 @@ func _ask(msg: Dictionary, what: String) -> bool:
 		s._offline_toast()
 		return false
 	busy = what
+	_busy_since = Time.get_ticks_msec()
 	s._mark_dirty()
+	if what == "ai":
+		# The AI can take a while (two tries of up to 90 s). Never leave the button stuck.
+		var started := _busy_since
+		s.get_tree().create_timer(200.0).timeout.connect(func():
+			if busy == "ai" and _busy_since == started:
+				busy = ""
+				_open_after_ai = false
+				s._toast("The builder didn't answer. Try again.")
+				s._mark_dirty())
 	return true
 
 
@@ -158,6 +176,7 @@ func build_from_words(text: String) -> void:
 		status = "draft"
 		undo.clear()
 		note = "Built on your phone (offline)."
+		source = "quick"
 		s.push({"k": "studio_edit"})
 		play_current()
 		return
@@ -203,7 +222,7 @@ func studio_screen() -> Control:
 	content.add_child(UiKit.margin(UiKit.label("Make a game", "headline_small", UiKit.c("on_surface"), false), 20, 12, 20, 0))
 	content.add_child(UiKit.margin(UiKit.label("Say what you want. Studio builds it, then you play it straight away.",
 		"body_medium", UiKit.c("on_surface_variant")), 20, 4, 20, 12))
-	var f: Array = UiKit.text_field("A lava obby with jump pads...", prompt_text, 300)
+	var f: Array = UiKit.text_field("A lava obby with jump pads...", prompt_text, 1000)
 	var e: LineEdit = f[1]
 	e.text_changed.connect(func(t): prompt_text = t)
 	e.text_submitted.connect(func(t): build_from_words(t))
@@ -213,6 +232,9 @@ func studio_screen() -> Control:
 	s._live(live, func(box: VBoxContainer):
 		var go := UiKit.primary_button("Building your game..." if busy == "ai" else "Build my game", "sparkles", func(): build_from_words(e.text))
 		go.disabled = busy != ""
+		if busy == "ai":
+			box.add_child(UiKit.margin(UiKit.empty_state("sparkles", "Building your game...",
+				"The AI is designing your course. This can take up to a minute."), 16, 12, 16, 0))
 		if not ai_on:
 			box.add_child(UiKit.margin(UiKit.empty_state("sparkles", "AI not set up yet",
 				"The Plux team hasn't switched on the AI builder yet. For now Studio makes a simpler game from your words."), 16, 12, 16, 0))
@@ -233,6 +255,7 @@ func studio_screen() -> Control:
 			status = "draft"
 			undo.clear()
 			note = ""
+			source = ""
 			s.push({"k": "studio_edit"})), 16, 16, 16, 0))
 		box.add_child(UiKit.section_title("Your games"))
 		if not mine_loaded:
@@ -280,12 +303,17 @@ func _fill_editor(box: VBoxContainer) -> void:
 	box.add_child(UiKit.margin(head, 0, 8, 0, 0))
 	var play := UiKit.primary_button("Play it now", "play", play_current)
 	box.add_child(UiKit.margin(play, 16, 12, 16, 0))
+	if source != "":
+		var tag := UiKit.pill("Made by the AI" if source == "ai" else "Made by the quick builder")
+		var row := UiKit.hbox(0)
+		row.add_child(tag)
+		box.add_child(UiKit.margin(row, 20, 8, 20, 0))
 	if note != "":
 		box.add_child(UiKit.margin(UiKit.label(note, "body_small", UiKit.c("on_surface_variant")), 20, 6, 20, 0))
 
 	# Change it in words
 	box.add_child(UiKit.section_title("Change it with words"))
-	var cf: Array = UiKit.text_field("Make it harder, add lava...", change_text, 300)
+	var cf: Array = UiKit.text_field("Make it harder, add lava...", change_text, 1000)
 	var ce: LineEdit = cf[1]
 	ce.text_changed.connect(func(t): change_text = t)
 	ce.text_submitted.connect(func(t): change_with_words(t))

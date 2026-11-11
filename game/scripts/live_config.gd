@@ -36,7 +36,7 @@ const DEFAULTS := {
 	"f_buy_plux": false, "pay_mode": "sandbox", "pay_provider": "none", "pay_testers": "",
 	"plux_packs": "[{\"id\":\"p80\",\"plux\":80,\"price\":0.99,\"cur\":\"USD\"},{\"id\":\"p400\",\"plux\":400,\"bonus\":40,\"price\":4.99,\"cur\":\"USD\"},{\"id\":\"p800\",\"plux\":800,\"bonus\":100,\"price\":9.99,\"cur\":\"USD\",\"tag\":\"Popular\"},{\"id\":\"p1700\",\"plux\":1700,\"bonus\":300,\"price\":19.99,\"cur\":\"USD\",\"tag\":\"Best value\"}]",
 	# Studio and AI (the key itself is never here: see AdminHub)
-	"ai_per_day": 5, "ai_max_tokens": 1800, "ai_timeout_s": 45,
+	"ai_per_day": 5, "ai_max_tokens": 4000, "ai_timeout_s": 90,
 	"studio_max_parts": 160, "studio_max_games_per_player": 10,
 	# Home and Games tab
 	"home_featured": "",          # game id shown as a hero card on Home
@@ -51,7 +51,7 @@ const RANGES := {
 	"outfits_free": [0, 50], "coins_daily": [0, 100000], "coins_round": [0, 10000], "coins_win": [0, 100000], "coins_publish": [0, 100000],
 	"coins_play_mine": [0, 1000], "round_rewards_per_day": [0, 1000], "start_coins": [0, 100000],
 	"coins_neon": [0, 10000], "neon_reward_s": [15, 3600], "coins_studio_goal": [0, 10000], "coins_studio_first": [0, 10000],
-	"ai_per_day": [0, 100], "ai_max_tokens": [300, 6000], "ai_timeout_s": [10, 120],
+	"ai_per_day": [0, 100], "ai_max_tokens": [300, 16000], "ai_timeout_s": [10, 180],
 	"studio_max_parts": [20, 400], "studio_max_games_per_player": [1, 100], "announce_id": [0, 1000000000],
 }
 

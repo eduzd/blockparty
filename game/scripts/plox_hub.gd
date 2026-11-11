@@ -49,7 +49,7 @@ const LOADS := [
 const ADMIN_LOCK_FAILS := 5
 const ADMIN_LOCK_S := 600
 const AI_GLOBAL_PER_DAY := 300
-const MAX_PROMPT := 300
+const MAX_PROMPT := 1000
 const LEVEL_MSG_BYTES := 16000
 
 var hub: SocialHub
@@ -1012,15 +1012,37 @@ func _ai_build(me: String, msg: Dictionary, reply: Callable, now: int) -> void:
 	_ai_call(prompt, func(ok: bool, level: Dictionary, why: String):
 		_ai_busy.erase(me)
 		var ms := Time.get_ticks_msec() - started
-		_ai_note(me, ("[edit] " if not change.is_empty() else "") + prompt, ok, ms, why)
+		var info := str(level.get("_info", ""))
+		level.erase("_info")
+		_ai_note(me, ("[edit] " if not change.is_empty() else "") + prompt, ok, ms, info if ok else why)
 		if ok:
-			reply.call({"t": "s_ai_res", "ok": true, "level": level, "left": maxi(0, ai_cap_for(me) - _ai_used_today(me))})
+			level.title = filter_text(str(level.title))
+			reply.call({"t": "s_ai_res", "ok": true, "level": level, "source": "ai", "ms": ms,
+				"why": "Built by the AI in %.0f seconds." % (ms / 1000.0),
+				"left": maxi(0, ai_cap_for(me) - _ai_used_today(me))})
 		else:
-			# The AI failed: hand back a game from the word builder so the player isn't stuck.
+			# The AI failed: hand back a game from the word builder so the player isn't stuck,
+			# and say so plainly.
 			var lv2 := PloxLevel.clean(PloxLevel.quick_build(prompt, change if not change.is_empty() else null), cfg.i("studio_max_parts"))
 			lv2.title = filter_text(lv2.title)
-			reply.call({"t": "s_ai_res", "ok": true, "level": lv2, "quick": true, "why": "The AI couldn't build that one (%s), so the quick builder made it." % why,
+			reply.call({"t": "s_ai_res", "ok": true, "level": lv2, "quick": true, "source": "quick", "ai_error": why.substr(0, 200),
+				"why": "The AI couldn't build this one, so the quick builder made a simpler version. (%s)" % _player_ai_reason(why),
 				"left": maxi(0, ai_cap_for(me) - _ai_used_today(me))}), false, {"agent": ag}, change)
+
+
+## A short, player-friendly reason (never the URL or anything private).
+static func _player_ai_reason(why: String) -> String:
+	if why.contains("seconds"):
+		return "the AI took too long"
+	if why.contains("HTTP 401") or why.contains("HTTP 403"):
+		return "the AI key was refused"
+	if why.contains("HTTP 429"):
+		return "the AI is busy"
+	if why.contains("could not reach") or why.contains("HTTP 5") or why.contains("web page"):
+		return "the AI service is offline"
+	if why.contains("HTTP 404"):
+		return "the AI address is wrong"
+	return "its answer couldn't be used"
 
 
 func _ai_used_today(uid: String) -> int:
@@ -1034,23 +1056,26 @@ func _ai_note(uid: String, prompt: String, ok: bool, ms: int, why: String) -> vo
 	_db("insert into plox_ai_log (ts, uid, prompt, ok, ms, why) values ($1, $2, $3, $4, $5, $6)", [_now(), uid, prompt, ok, ms, why])
 
 
-## Calls {base}/chat/completions. done(ok, level, why). A test call uses a tiny prompt.
+## Calls {base}/chat/completions. done(ok, level, why). A test call uses a small prompt.
+## 0.7.2: reads every common reply shape (plain, streamed, split into parts, reasoning
+## only, fenced, cut off), repairs and closes broken JSON, and tries a second time with a
+## stricter note when the first answer can't be used. Every failure says exactly why,
+## with a short preview of what came back, so the usage log and Test connection show
+## the real problem. On success level["_info"] says how it went (callers remove it).
 func _ai_call(prompt: String, done: Callable, test := false, override := {}, change := {}) -> void:
-	var base := str(override.get("base", ai_cfg.base)).strip_edges().trim_suffix("/")
+	var base := str(override.get("base", ai_cfg.base)).strip_edges()
 	var ag: Dictionary = override.get("agent", {})
 	var model := str(override.get("model", ai_cfg.model)).strip_edges()
 	if str(ag.get("model", "")).strip_edges() != "" and not override.has("model"):
 		model = str(ag.model).strip_edges()
 	var key := str(override.get("key", "")) if str(override.get("key", "")) != "" else _ai_key()
-	if not (base.begins_with("https://") or base.begins_with("http://")):
+	var url := ai_endpoint(base)
+	if url == "":
 		done.call(false, {}, "base URL must start with https://")
 		return
-	if base.ends_with("/chat/completions"):
-		base = base.trim_suffix("/chat/completions")
-	var http := HTTPRequest.new()
-	http.timeout = float(cfg.i("ai_timeout_s"))
-	http.use_threads = true
-	add_child(http)
+	if model == "":
+		done.call(false, {}, "no model name saved")
+		return
 	var messages := []
 	if test:
 		messages = [{"role": "user", "content": "Reply with exactly this JSON and nothing else: {\"ok\": true}"}]
@@ -1060,70 +1085,131 @@ func _ai_call(prompt: String, done: Callable, test := false, override := {}, cha
 		if rules_txt.strip_edges() != "":
 			sys += "\n\nRules from the Plux team for you (%s). Follow them, but always reply in the JSON format above:\n%s" % [str(ag.get("name", "")), rules_txt]
 		messages = [{"role": "system", "content": sys},
-			{"role": "user", "content": "Build this game: " + prompt}]
+			{"role": "user", "content": "Build this game: " + prompt + "\n\nReply with the level JSON only."}]
 		if not change.is_empty() and change.get("parts", []).size() > 0:
 			messages[1].content = "Here is my current game as JSON:\n" + JSON.stringify(change) \
-				+ "\n\nChange it like this: " + prompt + "\nKeep everything I didn't ask to change. Reply with the whole updated game in the same JSON format."
-	var body := {"model": model, "messages": messages, "max_tokens": 40 if test else cfg.i("ai_max_tokens"), "temperature": 0.7}
-	var headers := PackedStringArray(["Content-Type: application/json", "Authorization: Bearer " + key,
-		"HTTP-Referer: https://github.com/eduzd/blockparty", "X-Title: Plox"])
+				+ "\n\nChange it like this: " + prompt + "\nKeep everything I didn't ask to change. Reply with the whole updated game in the same JSON format, JSON only."
+	var st := {"try": 1, "t0": Time.get_ticks_msec()}
+	_ai_try(url, model, key, messages, test, ag, done, st)
+
+
+## The chat/completions address for whatever the admin pasted: the bare host, .../v1,
+## .../v1/, or the full .../chat/completions all work.
+static func ai_endpoint(base: String) -> String:
+	var b := base.strip_edges()
+	if not (b.begins_with("https://") or b.begins_with("http://")):
+		return ""
+	while b.ends_with("/"):
+		b = b.trim_suffix("/")
+	if b.ends_with("/chat/completions"):
+		return b
+	if b.ends_with("/completions"):
+		b = b.trim_suffix("/completions")
+	# Bare host (no path): OpenAI-style routers serve under /v1.
+	var after := b.substr(b.find("//") + 2)
+	if not after.contains("/"):
+		b += "/v1"
+	return b + "/chat/completions"
+
+
+func _ai_try(url: String, model: String, key: String, messages: Array, test: bool, ag: Dictionary, done: Callable, st: Dictionary) -> void:
+	var http := HTTPRequest.new()
+	http.timeout = float(cfg.i("ai_timeout_s"))
+	http.use_threads = true
+	http.body_size_limit = 4 * 1024 * 1024
+	add_child(http)
+	var tokens := 400 if test else cfg.i("ai_max_tokens")
+	var body := {"model": model, "messages": messages, "max_tokens": tokens, "temperature": 0.4 if int(st.try) > 1 else 0.7, "stream": false}
+	var headers := PackedStringArray(["Content-Type: application/json", "Accept: application/json", "Authorization: Bearer " + key,
+		"User-Agent: PluxServer/0.7.2", "ngrok-skip-browser-warning: true",
+		"HTTP-Referer: https://github.com/eduzd/blockparty", "X-Title: Plux"])
+	var retry := func(why: String, bad_reply: String) -> bool:
+		if int(st.try) >= 2 or test:
+			return false
+		print("[ai] try %d failed (%s), trying again" % [int(st.try), why])
+		st.try = 2
+		st["first_why"] = why
+		var m2: Array = messages.duplicate(true)
+		if bad_reply.strip_edges() != "":
+			m2.append({"role": "assistant", "content": bad_reply.substr(0, 1200)})
+		m2.append({"role": "user", "content": PloxLevel.AI_RETRY_NOTE})
+		_ai_try(url, model, key, m2, test, ag, done, st)
+		return true
+	var fail := func(why: String, bad_reply: String, can_retry: bool):
+		if can_retry and retry.call(why, bad_reply):
+			return
+		var w := why
+		if st.has("first_why") and str(st.first_why) != why:
+			w = "try 1: %s; try 2: %s" % [str(st.first_why), why]
+		elif int(st.try) > 1:
+			w = why + " (2 tries)"
+		print("[ai] failed after %d ms: %s" % [Time.get_ticks_msec() - int(st.t0), w])
+		done.call(false, {}, w.substr(0, 400))
 	http.request_completed.connect(func(result: int, code: int, _h: PackedStringArray, raw: PackedByteArray):
 		http.queue_free()
 		if result != HTTPRequest.RESULT_SUCCESS:
-			done.call(false, {}, "timed out" if result == HTTPRequest.RESULT_TIMEOUT else "could not reach the AI (%d)" % result)
+			if result == HTTPRequest.RESULT_TIMEOUT:
+				fail.call("no answer within %d seconds" % cfg.i("ai_timeout_s"), "", false)
+			elif result == HTTPRequest.RESULT_BODY_SIZE_LIMIT_EXCEEDED:
+				fail.call("the answer was too big", "", true)
+			else:
+				fail.call("could not reach %s (network error %d)" % [url.get_slice("/", 2), result], "", false)
 			return
 		var text := raw.get_string_from_utf8()
 		if code < 200 or code >= 300:
-			var emsg := text.substr(0, 160)
-			var pj = JSON.parse_string(text)
+			var emsg := PloxAi.preview(text, 200)
+			var pj = PloxAi.parse(text)
 			if pj is Dictionary and pj.get("error") is Dictionary:
-				emsg = str(pj.error.get("message", emsg)).substr(0, 160)
-			done.call(false, {}, "HTTP %d: %s" % [code, emsg])
+				emsg = str(pj.error.get("message", emsg)).substr(0, 200)
+			elif pj is Dictionary and pj.get("error") is String:
+				emsg = str(pj.error).substr(0, 200)
+			elif pj is Dictionary and pj.get("message") is String:
+				emsg = str(pj.message).substr(0, 200)
+			if text.contains("<html") or text.contains("<!DOCTYPE"):
+				emsg = "the address answered with a web page, not the AI (" + PloxAi.preview(text, 80) + ")"
+			if code == 404:
+				emsg += ". Check the base URL ends in /v1 (Plux adds /chat/completions)"
+			fail.call("HTTP %d: %s" % [code, emsg], "", code == 429 or code >= 500)
 			return
-		var content := _content_of(text)
-		if content == "":
-			done.call(false, {}, "empty answer")
-			return
-		var obj = _json_in(content)
-		if not (obj is Dictionary):
-			done.call(false, {}, "answer was not JSON")
+		var r := PloxAi.reply_text(text)
+		var content: String = r.text
+		if content.strip_edges() == "" and str(r.reasoning).strip_edges() != "":
+			content = r.reasoning   # some routers put the whole answer in the reasoning field
+		if content.strip_edges() == "":
+			var detail := "shape %s, finish %s" % [r.shape, r.finish if r.finish != "" else "none"]
+			if r.shape == "not JSON":
+				detail = "not an AI reply: " + PloxAi.preview(text, 120)
+			elif r.finish == "length":
+				detail += ": it ran out of tokens before writing anything (raise the token limit or use a non-thinking model)"
+			fail.call("empty answer (%s)" % detail, "", true)
 			return
 		if test:
-			done.call(true, {}, "")
+			var to = PloxAi.find_level(content)
+			print("[ai] test ok in %d ms" % (Time.get_ticks_msec() - int(st.t0)))
+			done.call(true, {"_info": "model replied: " + PloxAi.preview(content, 60) + ("" if to is Dictionary else " (not JSON)")}, "")
 			return
+		var obj = PloxAi.find_level(content)
+		if not (obj is Dictionary):
+			fail.call("answer was not level JSON (finish %s): %s" % [r.finish if r.finish != "" else "none", PloxAi.preview(content, 140)], content, true)
+			return
+		var raw_n := 0
+		var src = obj.get("parts", obj.get("objects", []))
+		if src is Array:
+			raw_n = src.size()
 		var level := PloxLevel.clean(obj, cfg.i("studio_max_parts"))
 		if not ag.is_empty():
 			level = AgentRules.enforce_level(level, ag)
 		if level.parts.size() < 3:
-			done.call(false, {}, "too few parts")
+			fail.call("too few usable parts (%d of %d): %s" % [level.parts.size(), raw_n, PloxAi.preview(content, 100)], content, true)
 			return
+		var info := "AI, %d parts%s%s" % [level.parts.size(), ", 2nd try" if int(st.try) > 1 else "", ", cut off and closed" if r.finish == "length" else ""]
+		print("[ai] ok in %d ms: %s, '%s'" % [Time.get_ticks_msec() - int(st.t0), info, str(level.title)])
+		level["_info"] = info
 		done.call(true, level, ""))
-	var err := http.request(base + "/chat/completions", headers, HTTPClient.METHOD_POST, JSON.stringify(body))
+	var err := http.request(url, headers, HTTPClient.METHOD_POST, JSON.stringify(body))
 	if err != OK:
 		http.queue_free()
-		done.call(false, {}, "request failed (%d)" % err)
-
-
-static func _content_of(text: String) -> String:
-	var j = JSON.parse_string(text)
-	if not (j is Dictionary):
-		return ""
-	var ch = j.get("choices")
-	if not (ch is Array) or ch.is_empty() or not (ch[0] is Dictionary):
-		return ""
-	var m = ch[0].get("message")
-	if m is Dictionary and m.get("content") is String:
-		return m.content
-	return ""
-
-
-## Finds the first {...} JSON object in a reply, even inside code fences or prose.
-static func _json_in(s: String):
-	var a := s.find("{")
-	var b := s.rfind("}")
-	if a < 0 or b <= a:
-		return null
-	return JSON.parse_string(s.substr(a, b - a + 1))
+		fail.call("request failed to start (%d)" % err, "", false)
 
 
 # ------------------------------------------------------------------ admin
@@ -1455,8 +1541,10 @@ func admin_handle(cid: int, msg: Dictionary, send: Callable) -> String:
 			var full := bool(msg.get("full", false))
 			_ai_call("a short obstacle course with a jump pad" if full else "", func(ok: bool, level: Dictionary, why: String):
 				var ms := Time.get_ticks_msec() - started
-				_ai_note("admin", "(test)" if not full else "(test build)", ok, ms, why)
-				reply.call({"t": "a_ai_test_res", "ok": ok, "why": why, "ms": ms, "parts": level.get("parts", []).size(), "title": level.get("title", "")}), not full)
+				var info := str(level.get("_info", ""))
+				_ai_note("admin", "(test)" if not full else "(test build)", ok, ms, info if ok else why)
+				reply.call({"t": "a_ai_test_res", "ok": ok, "why": why, "info": info, "ms": ms, "parts": level.get("parts", []).size(), "title": level.get("title", ""),
+					"endpoint": ai_endpoint(ai_cfg.base), "model": ai_cfg.model}), not full)
 		"a_pro_set":
 			var uid := str(msg.get("uid", ""))
 			var days = msg.get("days", 0)
@@ -1569,8 +1657,9 @@ func admin_handle(cid: int, msg: Dictionary, send: Callable) -> String:
 				tp = "a short obstacle course with a jump pad"
 			_ai_call(tp, func(ok: bool, level: Dictionary, why: String):
 				var ms := Time.get_ticks_msec() - t0
-				_ai_note("admin", "(test %s) %s" % [a.name, tp], ok, ms, why)
-				reply.call({"t": "a_ai_test_res", "ok": ok, "why": why, "ms": ms, "parts": level.get("parts", []).size(), "title": level.get("title", "")}), false, {"agent": a})
+				var info := str(level.get("_info", ""))
+				_ai_note("admin", "(test %s) %s" % [a.name, tp], ok, ms, info if ok else why)
+				reply.call({"t": "a_ai_test_res", "ok": ok, "why": why, "info": info, "ms": ms, "parts": level.get("parts", []).size(), "title": level.get("title", "")}), false, {"agent": a})
 		"a_cfg":
 			reply.call({"t": "a_cfg_res", "cfg": cfg.values, "defaults": LiveConfig.DEFAULTS})
 		"a_audit":

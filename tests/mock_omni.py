@@ -31,14 +31,57 @@ class H(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(n) or b"{}")
         auth = self.headers.get("Authorization", "")
         json.dump({"path": self.path, "auth_ok": auth == "Bearer " + KEY, "body": body}, open("/tmp/mock_omni_last.json", "w"))
-        if not self.path.endswith("/chat/completions"):
+        if self.path != "/v1/chat/completions":
             return self._send(404, {"error": {"message": "not found"}})
         if auth != "Bearer " + KEY:
             return self._send(401, {"error": {"message": "Invalid API key"}})
         msgs = body.get("messages", [])
         last = msgs[-1]["content"] if msgs else ""
         content = '{"ok": true}' if "Reply with exactly this JSON" in last else json.dumps(LEVEL)
-        self._send(200, {"id": "mock", "model": body.get("model"), "choices": [{"index": 0, "message": {"role": "assistant", "content": content}}]})
+        model = str(body.get("model", ""))
+        retry = "could not be used" in last
+        lv = json.dumps(LEVEL, indent=2)
+        msg = {"role": "assistant", "content": content}
+        finish = "stop"
+        if content.startswith('{"ok"'):
+            pass
+        elif model == "mock-fenced":
+            msg["content"] = "Sure! Here is your level:\n```json\n" + lv.replace('"parts": [', '"parts": [ // the course\n') + "\n```\nHave fun!"
+        elif model == "mock-trailing":
+            msg["content"] = lv.replace("]\n  ]", "],\n  ],")
+        elif model == "mock-wrapped":
+            msg["content"] = json.dumps({"level": LEVEL})
+        elif model == "mock-parts":
+            msg["content"] = [{"type": "text", "text": json.dumps(LEVEL)}]
+        elif model == "mock-reasoning":
+            msg = {"role": "assistant", "content": None, "reasoning_content": "Thinking... " + json.dumps(LEVEL)}
+        elif model == "mock-think":
+            msg["content"] = "<think>I will make { a level }</think>" + json.dumps(LEVEL)
+        elif model == "mock-cut":
+            full = json.dumps(LEVEL)
+            msg["content"] = full[: full.index('["coin"') + 10]
+            finish = "length"
+        elif model == "mock-badfirst":
+            msg["content"] = json.dumps(LEVEL) if retry else "-- Luau\nlocal Players = game:GetService('Players')"
+        elif model == "mock-luau":
+            msg["content"] = "-- Luau script\nlocal x = 1"
+        elif model == "mock-empty":
+            msg["content"] = ""
+            finish = "length"
+        if model == "mock-sse":
+            raw = ""
+            full = json.dumps(LEVEL)
+            for i in range(0, len(full), 40):
+                raw += "data: " + json.dumps({"choices": [{"index": 0, "delta": {"content": full[i:i+40]}}]}) + "\n\n"
+            raw += "data: [DONE]\n\n"
+            b = raw.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+            return
+        self._send(200, {"id": "mock", "model": model, "choices": [{"index": 0, "message": msg, "finish_reason": finish}]})
 
     def _send(self, code, obj):
         raw = json.dumps(obj).encode()
