@@ -21,6 +21,7 @@ var follows := {}     # uid -> {uid: true}   (who uid follows)
 var friends := {}     # uid -> {uid: true}
 var requests := {}    # to_uid -> {from_uid: true}
 var queue := {}       # to_uid -> [msg]
+var inflight := {}    # to_uid -> {mid: msg}  sent to a live socket, not yet confirmed (s_got)
 var by_cid := {}      # connection id -> uid
 var _send: Callable   # (cid, Dictionary) -> void
 var _log: Callable
@@ -172,6 +173,7 @@ func on_hello(cid: int, msg: Dictionary, now_unix: int) -> String:
 	if _online(uid):
 		var old := int(users[uid].cid)
 		by_cid.erase(old)
+		_requeue_inflight(uid)
 		_send.call(old, {"t": "error", "code": "signed_in_elsewhere", "msg": "Signed in on another phone", "fatal": true})
 	var u: Dictionary = users.get(uid, {"uid": uid})
 	u.name = Protocol.sanitize_name(msg.get("name"))
@@ -231,8 +233,7 @@ func on_hello(cid: int, msg: Dictionary, now_unix: int) -> String:
 	var waiting: Array = queue.get(uid, [])
 	queue.erase(uid)
 	for m in waiting:
-		_send.call(cid, m)
-		_push(str(m.from), {"t": "s_ack", "mid": m.mid, "to": uid, "state": "delivered"})
+		_deliver(uid, m)
 	_notify_friends_presence(uid)
 	_log.call("social: @%s online (%d friends, %d following)" % [u.username, mine.size(), my_follows.size()])
 	return ""
@@ -249,6 +250,7 @@ func on_disconnect(cid: int, now_unix: int) -> void:
 	var uid: String = by_cid[cid]
 	by_cid.erase(cid)
 	if users.has(uid) and int(users[uid].cid) == cid:
+		_requeue_inflight(uid)
 		users[uid].cid = -1
 		users[uid].last_seen = now_unix
 		_notify_friends_presence(uid)
@@ -404,21 +406,19 @@ func handle(cid: int, msg: Dictionary, now_unix: int) -> String:
 			var ts = msg.get("ts")
 			var out := {"t": "s_msg", "from": me, "mid": mid, "text": text,
 				"ts": int(ts) if (ts is float or ts is int) else now_unix, "name": users[me].name}
+			# "queued" = the server has it. "delivered" comes when the friend's phone
+			# confirms it (s_got); until then it is resent if their connection drops.
+			_send.call(cid, {"t": "s_ack", "mid": mid, "to": to, "state": "queued"})
 			if _online(to):
-				_push(to, out)
-				_send.call(cid, {"t": "s_ack", "mid": mid, "to": to, "state": "delivered"})
+				_deliver(to, out)
 			else:
-				var q: Array = queue.get(to, [])
-				var dup := false
-				for m in q:
-					if m.mid == mid:
-						dup = true
-				if not dup:
-					q.append(out)
-					if q.size() > MAX_QUEUE:
-						q.pop_front()
-				queue[to] = q
-				_send.call(cid, {"t": "s_ack", "mid": mid, "to": to, "state": "queued"})
+				_enqueue(to, out)
+		"s_got":
+			var mid = msg.get("mid")
+			if mid is String and inflight.has(me) and inflight[me].has(mid):
+				var m: Dictionary = inflight[me][mid]
+				inflight[me].erase(mid)
+				_push(str(m.from), {"t": "s_ack", "mid": mid, "to": me, "state": "delivered"})
 		"s_typing":
 			var to = msg.get("to")
 			if valid_uid(to) and friends.get(me, {}).has(to):
@@ -441,3 +441,40 @@ func _make_friends(a: String, b: String) -> void:
 		requests[b].erase(a)
 	_push(a, {"t": "s_notice", "kind": "friends", "from": card(b, a)})
 	_push(b, {"t": "s_notice", "kind": "friends", "from": card(a, b)})
+
+
+func _deliver(to: String, m: Dictionary) -> void:
+	_bucket(inflight, to)[m.mid] = m
+	if inflight[to].size() > MAX_QUEUE:
+		inflight[to].erase(inflight[to].keys()[0])
+	_push(to, m)
+
+
+func _enqueue(to: String, m: Dictionary) -> void:
+	var q: Array = queue.get(to, [])
+	for x in q:
+		if x.mid == m.mid:
+			return
+	q.append(m)
+	if q.size() > MAX_QUEUE:
+		q.pop_front()
+	queue[to] = q
+
+
+## Messages sent to a connection that went away unconfirmed go back in the queue.
+func _requeue_inflight(uid: String) -> void:
+	if not inflight.has(uid):
+		return
+	var msgs: Array = inflight[uid].values()
+	inflight.erase(uid)
+	msgs.sort_custom(func(a, b): return int(a.ts) < int(b.ts))
+	var q: Array = queue.get(uid, [])
+	var merged := msgs.duplicate()
+	for x in q:
+		var dup := false
+		for y in msgs:
+			if y.mid == x.mid:
+				dup = true
+		if not dup:
+			merged.append(x)
+	queue[uid] = merged

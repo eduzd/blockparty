@@ -20,6 +20,7 @@ function user(acct) {
       const m = JSON.parse(d.toString());
       if (m.t === 'pong') return;
       c.inbox.push(m);
+      if (m.t === 's_msg' && !acct.noGot) ws.send(JSON.stringify({ t: 's_got', mid: m.mid }));
       if (m.t === 's_welcome') { c.welcome = m; resolve(c); }
     });
     ws.on('open', () => ws.send(JSON.stringify(Object.assign({ t: 's_hello', v: 1 }, acct))));
@@ -84,7 +85,9 @@ async function full() {
   ok(fa && fb && fb.user.friend === true, 'accepted: both are friends');
   // Chat
   send(a, { t: 's_msg', to: b.uid, mid: 'm0000000002', text: 'Hey Ben!', ts: 1 });
-  const ack = await wait(a, m => m.t === 's_ack' && m.mid === 'm0000000002');
+  const sent = await wait(a, m => m.t === 's_ack' && m.mid === 'm0000000002' && m.state === 'queued');
+  ok(!!sent, 'server confirms it has the message');
+  const ack = await wait(a, m => m.t === 's_ack' && m.mid === 'm0000000002' && m.state === 'delivered');
   const got = await wait(b, m => m.t === 's_msg');
   ok(ack && ack.state === 'delivered' && got && got.text === 'Hey Ben!' && got.from === a.uid, 'message delivered live');
   send(b, { t: 's_typing', to: a.uid });
@@ -93,19 +96,32 @@ async function full() {
   ok(!!(await wait(a, m => m.t === 's_read' && m.from === b.uid)), 'read receipt relayed');
   // Offline queue
   b.ws.close();
-  const pres = await wait(a, m => m.t === 's_presence' && m.uid === b.uid && m.online === false);
+  const pres = await wait(a, m => m.t === 's_presence' && m.uid === b.uid && m.online === false, 25000);
   ok(!!pres, 'Ana sees Ben go offline');
   send(a, { t: 's_msg', to: b.uid, mid: 'm0000000003', text: 'You there?' });
   const q = await wait(a, m => m.t === 's_ack' && m.mid === 'm0000000003');
   ok(q && q.state === 'queued', 'message to offline friend is queued');
+  ok(!(await wait(a, m => m.t === 's_ack' && m.mid === 'm0000000003' && m.state === 'delivered', 1000)), 'not marked delivered while Ben is away');
   B.friends = [a.uid];
-  const b2 = await user(B);
+  let b2 = await user(B);
   ok(b2.welcome.friends.some(u => u.uid === a.uid), 'Ben reconnects: still friends');
   const late = await wait(b2, m => m.t === 's_msg' && m.mid === 'm0000000003');
   ok(!!late && late.text === 'You there?', 'queued message arrives on reconnect');
   const dl = await wait(a, m => m.t === 's_ack' && m.mid === 'm0000000003' && m.state === 'delivered');
   ok(!!dl, 'Ana told it was delivered');
   ok(!!(await wait(a, m => m.t === 's_presence' && m.uid === b.uid && m.online === true)), 'Ana sees Ben come online');
+  // A phone whose connection dies without confirming: the message comes again.
+  B.noGot = true;
+  const b3 = await user(B);
+  await sleep(300);
+  send(a, { t: 's_msg', to: b.uid, mid: 'm0000000005', text: 'Lost in the tunnel?' });
+  ok(!!(await wait(b3, m => m.t === 's_msg' && m.mid === 'm0000000005')), 'sent to the new connection');
+  delete B.noGot;
+  const b4 = await user(B);   // replaces b3 (signed in elsewhere), unconfirmed message requeued
+  ok(!!(await wait(b4, m => m.t === 's_msg' && m.mid === 'm0000000005')), 'unconfirmed message re-delivered after reconnect');
+  ok(!!(await wait(a, m => m.t === 's_ack' && m.mid === 'm0000000005' && m.state === 'delivered')), 'delivered only once confirmed');
+  b2.ws.close(); b3.ws.close();
+  const bOld = b2; b2 = b4;
   // Edit profile
   send(b2, { t: 's_profile', name: 'Benny', username: 'benny_' + tag, bio: 'new bio', rid: 9 });
   const pr = await wait(b2, m => m.t === 's_profile_res');

@@ -359,6 +359,7 @@ func _on_chat(msg: Dictionary) -> void:
 	var w := str(msg.get("from", ""))
 	if not SocialHub.valid_uid(w):
 		return
+	_send({"t": "s_got", "mid": msg.get("mid")})
 	var chat: Array = data.chats.get(w, [])
 	for m in chat:
 		if m.mid == msg.get("mid"):
@@ -380,7 +381,7 @@ func _on_chat(msg: Dictionary) -> void:
 func _set_msg_state(to: String, mid: String, st: String) -> void:
 	for m in data.chats.get(to, []):
 		if m.mid == mid and m.from == uid:
-			if m.state == "read" and st != "not_friends":
+			if st != "not_friends" and (m.state == "read" or (m.state == "delivered" and st == "queued")):
 				return
 			m.state = "failed" if st == "not_friends" else st
 			_save_soon()
