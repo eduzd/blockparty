@@ -16,11 +16,22 @@ var _wind := {}               # code -> {now: Vector2, target: Vector2, next_cha
 var _clock := 0.0
 var _gravity := {}            # code -> {sign: float} (follows BeatClock)
 var balls_enabled := true
+## ICE servers handed to voice clients in the welcome. Free public STUN by default.
+## A TURN relay can be added later with the VOICE_ICE_SERVERS environment variable
+## (a JSON array like [{"urls":["turn:host:3478"],"username":"u","credential":"p"}])
+## so no address or credential is baked into the app.
+var voice_ice: Array = [{"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]}]
 var _next_id := 1
 var _snap_accum := 0.0
 
 
 func start(p_port: int, bind_address: String = "*") -> Error:
+	if OS.has_environment("VOICE_ICE_SERVERS"):
+		var parsed = JSON.parse_string(OS.get_environment("VOICE_ICE_SERVERS"))
+		if parsed is Array:
+			voice_ice = parsed
+		else:
+			_log("VOICE_ICE_SERVERS is not a JSON array; using public STUN")
 	var err := _tcp.listen(p_port, bind_address)
 	if err == OK:
 		port = p_port
@@ -85,7 +96,7 @@ func _accept_new(now: int) -> void:
 			conn.disconnect_from_host()
 			continue
 		var ws := WebSocketPeer.new()
-		ws.inbound_buffer_size = 8192
+		ws.inbound_buffer_size = 16384
 		ws.outbound_buffer_size = 65536
 		if ws.accept_stream(conn) == OK:
 			_pending.append({"ws": ws, "since": now})
@@ -145,21 +156,32 @@ func _poll_closing(now: int) -> void:
 
 func _handle_packet(c: Dictionary, pkt: PackedByteArray, is_text: bool, now: int) -> void:
 	var id: int = c.id
-	# Rate limit
-	if now - int(c.win_start) >= 1000:
-		c.win_start = now
-		c.win_count = 0
-	c.win_count += 1
-	if c.win_count > Protocol.MAX_MSGS_PER_SEC:
-		_kick(id, "rate_limit", "Too many messages")
-		return
-	if pkt.size() > Protocol.MAX_MESSAGE_BYTES:
+	if pkt.size() > Protocol.MAX_SIGNAL_BYTES:
 		_kick(id, "too_big", "Message too large")
 		return
-	var msg = Protocol.decode(pkt.get_string_from_utf8()) if is_text else null
+	var msg = Protocol.decode(pkt.get_string_from_utf8(), Protocol.MAX_SIGNAL_BYTES) if is_text else null
 	if msg == null:
 		_bad(c, "bad_message")
 		return
+	var is_signal: bool = msg.t == "vsig"
+	if pkt.size() > Protocol.MAX_MESSAGE_BYTES and not is_signal:
+		_kick(id, "too_big", "Message too large")
+		return
+	# Rate limits: game messages and voice signalling are counted separately.
+	if now - int(c.win_start) >= 1000:
+		c.win_start = now
+		c.win_count = 0
+		c.sig_count = 0
+	if is_signal:
+		c.sig_count = int(c.get("sig_count", 0)) + 1
+		if c.sig_count > Protocol.MAX_SIGNALS_PER_SEC:
+			_kick(id, "rate_limit", "Too many messages")
+			return
+	else:
+		c.win_count += 1
+		if c.win_count > Protocol.MAX_MSGS_PER_SEC:
+			_kick(id, "rate_limit", "Too many messages")
+			return
 	c.last_msg = now
 	match msg.t:
 		"hello":
@@ -172,8 +194,85 @@ func _handle_packet(c: Dictionary, pkt: PackedByteArray, is_text: bool, now: int
 		"ping":
 			var stamp = Protocol.parse_number(msg.get("c"))
 			_send(c, {"t": "pong", "c": stamp if stamp != null else 0})
+		"vjoin":
+			_on_voice_join(c)
+		"vleave":
+			_on_voice_leave(c)
+		"vsig":
+			_on_voice_signal(c, msg)
 		_:
 			_bad(c, "unknown_type")
+
+
+# ---------------------------------------------------------------- voice signalling
+# Voice audio goes phone to phone over WebRTC. The referee only passes the small
+# setup messages (offers, answers, ICE candidates) between talkers in the SAME room,
+# and tells the room who is in voice. It never sees or stores any audio.
+
+func _voice_members(room: String) -> Array:
+	var out := []
+	for other_id in _rooms.get(room, []):
+		if _clients.has(other_id) and bool(_clients[other_id].get("voice", false)):
+			out.append(other_id)
+	return out
+
+
+func _on_voice_join(c: Dictionary) -> void:
+	if c.room == "":
+		_bad(c, "not_in_room")
+		return
+	if bool(c.get("voice", false)):
+		return
+	var others := _voice_members(c.room)
+	c.voice = true
+	# The newcomer calls everyone already talking; they answer.
+	_send(c, {"t": "vpeers", "ids": others})
+	_broadcast(c.room, {"t": "vjoin", "id": c.id}, c.id)
+
+
+func _on_voice_leave(c: Dictionary) -> void:
+	if not bool(c.get("voice", false)):
+		return
+	c.voice = false
+	if c.room != "":
+		_broadcast(c.room, {"t": "vleave", "id": c.id}, c.id)
+
+
+func _on_voice_signal(c: Dictionary, msg: Dictionary) -> void:
+	if c.room == "" or not bool(c.get("voice", false)):
+		_bad(c, "not_in_voice")
+		return
+	var to = Protocol.parse_number(msg.get("to"))
+	if to == null or not _clients.has(int(to)) or int(to) == c.id:
+		return   # they may have just left; not the sender's fault
+	var target: Dictionary = _clients[int(to)]
+	if target.room != c.room or not bool(target.get("voice", false)):
+		return
+	var out := {"t": "vsig", "from": c.id}
+	match msg.get("k"):
+		"offer", "answer":
+			var sdp = msg.get("sdp")
+			if not (sdp is String) or sdp.length() > Protocol.MAX_SDP_CHARS:
+				_bad(c, "bad_signal")
+				return
+			out.k = msg.k
+			out.sdp = sdp
+		"ice":
+			var cand = msg.get("cand")
+			var mid = msg.get("mid")
+			var idx = Protocol.parse_number(msg.get("idx"))
+			if not (cand is String) or cand.length() > Protocol.MAX_ICE_CHARS or not (mid is String) \
+					or mid.length() > 16 or idx == null:
+				_bad(c, "bad_signal")
+				return
+			out.k = "ice"
+			out.cand = cand
+			out.mid = mid
+			out.idx = clampi(int(idx), 0, 16)
+		_:
+			_bad(c, "bad_signal")
+			return
+	_send(target, out)
 
 
 func _on_hello(c: Dictionary, msg: Dictionary, now: int) -> void:
@@ -219,7 +318,8 @@ func _on_hello(c: Dictionary, msg: Dictionary, now: int) -> void:
 			others.append(_describe(_clients[other_id]))
 	_send(c, {"t": "welcome", "id": c.id, "room": room, "name": c.name, "c": color,
 		"spawn": Protocol.vec_to_array(c.pos), "max": Protocol.MAX_PLAYERS_PER_ROOM, "players": others,
-		"ball_radii": BallSim.RADII if balls_enabled else [], "g": _gravity[room].sign, "ts": now})
+		"ball_radii": BallSim.RADII if balls_enabled else [], "g": _gravity[room].sign, "ts": now,
+		"voice": {"ice": voice_ice, "talkers": _voice_members(room)}})
 	_broadcast(room, {"t": "join", "p": _describe(c)}, c.id)
 	_log("%s joined room %s (%d/%d)" % [c.name, room, members.size(), Protocol.MAX_PLAYERS_PER_ROOM])
 
@@ -366,6 +466,8 @@ func _remove(id: int, reason: String) -> void:
 			_wind.erase(c.room)
 			_gravity.erase(c.room)
 		else:
+			if bool(c.get("voice", false)):
+				_broadcast(c.room, {"t": "vleave", "id": id}, -1)
 			_broadcast(c.room, {"t": "leave", "id": id}, -1)
 			if _balls.has(c.room):
 				_balls[c.room].forget_player(id)

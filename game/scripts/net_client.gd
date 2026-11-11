@@ -95,7 +95,7 @@ func _process(_delta: float) -> void:
 			_ws.send_text(Protocol.encode({"t": "hello", "v": Protocol.VERSION, "name": player_name, "room": room}))
 		while _ws.get_available_packet_count() > 0:
 			var text := _ws.get_packet().get_string_from_utf8()
-			var msg = Protocol.decode(text)
+			var msg = Protocol.decode(text, Protocol.MAX_SIGNAL_BYTES)
 			if msg == null:
 				continue
 			_last_rx = now

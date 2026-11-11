@@ -1,0 +1,40 @@
+plugins {
+    id 'com.android.library'
+    id 'org.jetbrains.kotlin.android'
+}
+
+// Keep these two in step with addons/blockparty_voice/plugin.gd.
+ext.webrtcVersion = '1.3.10'
+ext.godotVersion = '4.7.2.stable'
+
+android {
+    namespace 'com.eduzd.blockparty.voice'
+    compileSdk 36
+
+    defaultConfig {
+        minSdk 24
+        consumerProguardFiles 'consumer-rules.pro'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}
+
+dependencies {
+    // Provided by the Godot app at runtime.
+    compileOnly "org.godotengine:godot:$godotVersion"
+    // Google's libwebrtc (Opus, echo cancellation, noise suppression), packaged by Stream.
+    // Not bundled into the AAR: the export plugin adds it to the app as a Maven dependency.
+    compileOnly "io.getstream:stream-webrtc-android:$webrtcVersion"
+}

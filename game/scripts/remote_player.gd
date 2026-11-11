@@ -10,11 +10,15 @@ var _buffer: Array = []   # [[local_ms, Vector3, yaw], ...]
 var _last_pos := Vector3.ZERO
 
 
-func setup(id: int, display_name: String, color: Color, pos: Vector3, yaw: float) -> void:
+var display_name := ""
+
+
+func setup(id: int, p_name: String, color: Color, pos: Vector3, yaw: float) -> void:
+	display_name = p_name
 	player_id = id
 	avatar = Avatar.new()
 	add_child(avatar)
-	avatar.setup(display_name, color)
+	avatar.setup(p_name, color)
 	position = pos
 	_last_pos = pos
 	avatar.rotation.y = yaw

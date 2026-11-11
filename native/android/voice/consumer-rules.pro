@@ -1,0 +1,2 @@
+-keep class com.eduzd.blockparty.voice.** { *; }
+-keep class org.webrtc.** { *; }

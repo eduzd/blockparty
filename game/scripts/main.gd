@@ -4,7 +4,7 @@ extends Node
 ## Filled in after the Render deploy. Players can still change it in the menu.
 const DEFAULT_SERVER_URL := "wss://YOUR-SERVICE.onrender.com"
 const SETTINGS_PATH := "user://settings.cfg"
-const DP := 2.0   # 1280x720 viewport = 640x360 dp
+## UI is laid out in dp (short side = 360 dp) and scaled to the screen; see ScreenUtil.
 
 var net: NetClient
 var host_server: RefereeServer
@@ -20,6 +20,21 @@ var friend_edit: LineEdit
 var menu_status: Label
 var menu_buttons: Array[Control] = []
 var music_on := true
+var orientation := "portrait"   # the player's choice; portrait by default
+var fader: RotateFader
+var voice: VoiceChat
+var hud_buttons: Control
+var hud_info_col: VBoxContainer
+var hud_hosts: Label
+var hud_voice: Label
+var mic_btn: Button
+var voice_btn: Button
+var rotate_btn: Button
+var hud_toast: Label
+var _toast_tween: Tween
+var cam_fov_target := 70.0
+var cam_dist := 7.5
+var cam_dist_target := 7.5
 
 # Game
 var world: Node3D
@@ -62,6 +77,10 @@ func _ready() -> void:
 	get_tree().quit_on_go_back = false
 	settings.load(SETTINGS_PATH)
 	music_on = bool(settings.get_value("p", "music", true))
+	orientation = "landscape" if settings.get_value("p", "orient", "portrait") == "landscape" else "portrait"
+	ScreenUtil.apply_orientation(orientation)
+	fader = RotateFader.new()
+	add_child(fader)
 	UiKit.dark = DisplayServer.is_dark_mode()
 	net = NetClient.new()
 	add_child(net)
@@ -69,6 +88,11 @@ func _ready() -> void:
 	net.message.connect(_on_message)
 	net.status_changed.connect(_on_status)
 	net.gave_up.connect(_on_gave_up)
+	voice = VoiceChat.new()
+	add_child(voice)
+	voice.setup(net)
+	voice.changed.connect(_refresh_voice_ui)
+	voice.notice.connect(_toast)
 	get_viewport().size_changed.connect(_fit_roots)
 	_build_menu()
 	if autotest != "":
@@ -111,17 +135,47 @@ func _sync_clock(ts) -> void:
 ## A root control sized in dp and scaled up to the screen.
 func _scaled_root(layer: CanvasLayer) -> Control:
 	var root := Control.new()
-	root.scale = Vector2(DP, DP)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(root)
 	return root
 
 
+## Sizes the dp roots to the safe area (clear of camera holes and the gesture bar)
+## and re-lays out the HUD. Runs on every resize and orientation change.
 func _fit_roots() -> void:
-	var s := get_viewport().get_visible_rect().size / DP
+	var vp := get_viewport()
+	var k := ScreenUtil.dp(vp)
+	var full := vp.get_visible_rect().size
+	var ins := ScreenUtil.insets(vp)
 	for r in [menu_root, hud_root]:
 		if r and is_instance_valid(r):
-			r.size = s
+			r.scale = Vector2(k, k)
+			if r == menu_root:
+				# The menu's background is full-screen; its content keeps off the cutout.
+				r.position = Vector2(ins.l, ins.t)
+				r.size = Vector2(full.x - ins.l - ins.r, full.y - ins.t) / k
+			else:
+				r.position = Vector2(ins.l, ins.t)
+				r.size = Vector2(full.x - ins.l - ins.r, full.y - ins.t - ins.b) / k
+	_layout_hud()
+	if camera:
+		_camera_targets(false)
+
+
+func _set_orientation(mode: String) -> void:
+	if mode == orientation or fader.busy:
+		return
+	orientation = mode
+	settings.set_value("p", "orient", mode)
+	settings.save(SETTINGS_PATH)
+	var bg := UiKit.c("background") if world == null else Color(0.02, 0.02, 0.06)
+	if touch:
+		touch.release_all()
+	fader.switch_to(mode, bg, func():
+		_fit_roots()
+		if world == null:
+			_build_menu()
+		_camera_targets(true))
 
 
 func _build_menu() -> void:
@@ -192,6 +246,19 @@ func _build_menu() -> void:
 			settings.set_value("p", "music", music_on)
 			settings.save(SETTINGS_PATH)
 			_build_menu()))
+
+	content.add_child(UiKit.section_title("Screen"))
+	var screen_card: Array = UiKit.card()
+	content.add_child(screen_card[0])
+	var rot_row := HBoxContainer.new()
+	rot_row.add_theme_constant_override("separation", 8)
+	rot_row.add_child(UiKit.chip("Portrait", orientation == "portrait", func(): _save_settings(); _set_orientation("portrait")))
+	rot_row.add_child(UiKit.chip("Landscape", orientation == "landscape", func(): _save_settings(); _set_orientation("landscape")))
+	var rot_col := UiKit.vbox(8)
+	rot_col.add_child(UiKit.label("Phone orientation", "title_medium", UiKit.c("on_surface")))
+	rot_col.add_child(UiKit.label("Portrait is the default. You can also turn the screen from inside a game.", "body_medium", UiKit.c("on_surface_variant")))
+	rot_col.add_child(rot_row)
+	screen_card[1].add_child(UiKit.margin(rot_col, 16, 14, 16, 16))
 
 	content.add_child(UiKit.section_title("Server"))
 	var sv: Array = UiKit.text_field("Server address (wss://...)", settings.get_value("p", "server", DEFAULT_SERVER_URL), 200, "Used by Play online")
@@ -307,9 +374,10 @@ func _enter_game() -> void:
 	walls.clock = world_t
 	world.add_child(walls)
 	camera = Camera3D.new()
-	camera.fov = 70
+	camera.keep_aspect = Camera3D.KEEP_HEIGHT
 	world.add_child(camera)
 	camera.make_current()
+	_camera_targets(true)
 
 	hud_layer = CanvasLayer.new()
 	add_child(hud_layer)
@@ -318,13 +386,34 @@ func _enter_game() -> void:
 	touch.show_touch = DisplayServer.is_touchscreen_available() or autotest != ""
 	touch.jump.connect(_on_jump)
 	hud_root = _scaled_root(hud_layer)
+	# Top-left: room info, host addresses and voice status, stacked.
+	hud_info_col = VBoxContainer.new()
+	hud_info_col.add_theme_constant_override("separation", 6)
+	hud_info_col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud_root.add_child(hud_info_col)
 	hud_info = UiKit.pill("")
-	hud_info.position = Vector2(12, 10)
-	hud_root.add_child(hud_info)
+	hud_info.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	hud_info_col.add_child(hud_info)
+	hud_hosts = UiKit.pill("")
+	hud_hosts.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	hud_hosts.visible = false
+	hud_info_col.add_child(hud_hosts)
+	hud_voice = UiKit.pill("")
+	hud_voice.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	hud_voice.visible = false
+	hud_info_col.add_child(hud_voice)
+	# Top-right: mic, voice, rotate, leave. Round 44 dp targets, 8 dp apart.
+	hud_buttons = HBoxContainer.new()
+	hud_buttons.add_theme_constant_override("separation", 8)
+	hud_root.add_child(hud_buttons)
+	mic_btn = _hud_button("microphone", func(): voice.toggle_mic())
+	voice_btn = _hud_button("speaker-wave", func(): voice.toggle_voice())
+	rotate_btn = _hud_button("device-phone-mobile", func():
+		_set_orientation("portrait" if orientation == "landscape" else "landscape"))
+	var leave := _hud_button("x-mark", _leave_game)
+	for b in [mic_btn, voice_btn, rotate_btn, leave]:
+		hud_buttons.add_child(b)
 	hud_drop = Label.new()
-	hud_drop.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	hud_drop.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	hud_drop.position.y = 44
 	hud_drop.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hud_drop.add_theme_font_override("font", UiKit.font("anton", 400))
 	hud_drop.add_theme_font_size_override("font_size", 28)
@@ -334,22 +423,151 @@ func _enter_game() -> void:
 	hud_drop.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud_root.add_child(hud_drop)
 	hud_banner = UiKit.pill("")
-	hud_banner.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	hud_banner.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	hud_banner.position.y = 90
 	hud_banner.visible = false
 	hud_root.add_child(hud_banner)
-	var leave := UiKit.outline_button("Leave", "x-mark", _leave_game)
-	leave.add_theme_color_override("font_color", Color.WHITE)
-	leave.add_theme_color_override("icon_normal_color", Color.WHITE)
-	for st in ["normal", "hover"]:
-		leave.add_theme_stylebox_override(st, UiKit.pad(UiKit.box(Color(0, 0, 0, 0.45), 12, Color(1, 1, 1, 0.5), 1), 14, 6))
-	leave.custom_minimum_size = Vector2(0, 40)
-	leave.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	leave.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	leave.position = Vector2(-12, 10)
-	hud_root.add_child(leave)
+	hud_toast = UiKit.pill("")
+	hud_toast.modulate.a = 0.0
+	hud_toast.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hud_root.add_child(hud_toast)
+	_refresh_voice_ui()
 	_fit_roots()
+
+
+## A round, translucent HUD button with a Heroicon. 44 dp touch target.
+func _hud_button(icon_name: String, cb: Callable) -> Button:
+	var b := Button.new()
+	b.icon = UiKit.icon_texture(icon_name)
+	b.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	b.expand_icon = false
+	b.add_theme_constant_override("icon_max_width", 22)
+	for st in ["icon_normal_color", "icon_pressed_color", "icon_hover_color", "icon_focus_color"]:
+		b.add_theme_color_override(st, Color.WHITE)
+	b.add_theme_stylebox_override("normal", UiKit.box(Color(0, 0, 0, 0.45), 22, Color(1, 1, 1, 0.45), 1))
+	b.add_theme_stylebox_override("hover", UiKit.box(Color(0, 0, 0, 0.45), 22, Color(1, 1, 1, 0.45), 1))
+	b.add_theme_stylebox_override("pressed", UiKit.box(Color(0, 0, 0, 0.65), 22, Color(1, 1, 1, 0.8), 1))
+	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	b.custom_minimum_size = Vector2(44, 44)
+	b.focus_mode = Control.FOCUS_NONE
+	b.pressed.connect(cb)
+	UiKit.add_press_shrink(b)
+	return b
+
+
+## Places the HUD for the current shape. Landscape: info left, buttons right on
+## one row. Portrait (narrow): buttons on the first row, info stacked under them.
+## Everything stays inside the safe area, and the touch zones skip the buttons.
+func _layout_hud() -> void:
+	if hud_root == null or not is_instance_valid(hud_root) or hud_buttons == null:
+		return
+	var w := hud_root.size.x
+	var bw := hud_buttons.get_combined_minimum_size().x
+	var bh := 44.0
+	hud_buttons.size = Vector2(bw, bh)
+	hud_buttons.position = Vector2(w - bw - 4.0, 4.0)
+	var info_w := hud_info_col.get_combined_minimum_size().x
+	var narrow := w - bw - 16.0 < maxf(info_w, 260.0)
+	if narrow:
+		hud_info_col.position = Vector2(4.0, 4.0 + bh + 8.0)
+	else:
+		hud_info_col.position = Vector2(4.0, 4.0)
+	var max_pill := w - 8.0 if narrow else w - bw - 20.0
+	for p in [hud_info, hud_hosts, hud_voice]:
+		p.custom_minimum_size.x = 0
+		p.autowrap_mode = TextServer.AUTOWRAP_OFF
+		if p.get_combined_minimum_size().x > max_pill:
+			p.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			p.custom_minimum_size.x = max_pill
+	hud_info_col.size = Vector2.ZERO
+	var below := hud_info_col.position.y + hud_info_col.get_combined_minimum_size().y + 10.0
+	var center_top := maxf(below, bh + 16.0) if narrow else bh + 24.0
+	hud_drop.size = Vector2(w, 40)
+	hud_drop.position = Vector2(0, center_top + 6.0)
+	for p in [hud_banner, hud_toast]:
+		p.custom_minimum_size.x = 0
+		p.autowrap_mode = TextServer.AUTOWRAP_OFF
+		if p.get_combined_minimum_size().x > w - 32.0:
+			p.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			p.custom_minimum_size.x = w - 32.0
+		p.size = Vector2.ZERO
+	hud_banner.position = Vector2((w - hud_banner.get_combined_minimum_size().x) / 2.0, center_top + 52.0)
+	hud_toast.position = Vector2((w - hud_toast.get_combined_minimum_size().x) / 2.0, center_top + 96.0)
+	if touch:
+		var rects: Array[Rect2] = []
+		var k := ScreenUtil.dp(get_viewport())
+		rects.append(Rect2(hud_root.position + hud_buttons.position * k - Vector2(6, 6) * k,
+			(hud_buttons.size + Vector2(12, 12)) * k))
+		touch.blocked_rects = rects
+		touch.relayout()
+
+
+func _toast(text: String) -> void:
+	if hud_toast == null or not is_instance_valid(hud_toast):
+		_status(text, false)
+		return
+	hud_toast.text = text
+	_layout_hud()
+	if _toast_tween:
+		_toast_tween.kill()
+	_toast_tween = create_tween()
+	_toast_tween.tween_property(hud_toast, "modulate:a", 1.0, 0.18)
+	_toast_tween.tween_interval(2.6)
+	_toast_tween.tween_property(hud_toast, "modulate:a", 0.0, 0.4)
+
+
+func _refresh_voice_ui() -> void:
+	if voice_btn == null or not is_instance_valid(voice_btn):
+		return
+	var on := voice.is_on()
+	var busy := voice.state == VoiceChat.State.ASKING or voice.state == VoiceChat.State.STARTING
+	voice_btn.icon = UiKit.icon_texture("speaker-wave")
+	voice_btn.modulate = Color(1, 1, 1, 0.45) if voice.state == VoiceChat.State.UNAVAILABLE else Color.WHITE
+	var on_box := UiKit.box(UiKit.SKY_MEDIUM if on else Color(0, 0, 0, 0.45), 22, Color(1, 1, 1, 0.8 if on else 0.45), 1)
+	voice_btn.add_theme_stylebox_override("normal", on_box)
+	voice_btn.add_theme_stylebox_override("hover", on_box)
+	mic_btn.visible = on
+	var lvl := float(voice.levels.get("me", 0.0))
+	var mic_col := Color(0.85, 0.2, 0.25, 0.85) if not voice.mic_on else Color(0.15, 0.7, 0.4, 0.55 + clampf(lvl * 3.0, 0.0, 0.4))
+	var mic_box := UiKit.box(mic_col, 22, Color(1, 1, 1, 0.8), 1)
+	mic_btn.add_theme_stylebox_override("normal", mic_box)
+	mic_btn.add_theme_stylebox_override("hover", mic_box)
+	var txt := ""
+	if busy:
+		txt = "Starting voice..."
+	elif on:
+		var talking := []
+		for id in voice.levels:
+			if typeof(id) == TYPE_INT and float(voice.levels[id]) > 0.04 and remotes.has(id):
+				talking.append(remotes[id].display_name if "display_name" in remotes[id] else "Player")
+		txt = "Voice: %d of %d connected  ·  mic %s" % [voice.connected_count(), voice.talkers.size(), "on" if voice.mic_on else "muted"]
+		if not talking.is_empty():
+			txt += "  ·  talking: " + ", ".join(talking)
+	elif voice.talkers.size() > 0:
+		txt = "%d in voice. Tap the speaker to join" % voice.talkers.size()
+	if hud_voice.text != txt:
+		hud_voice.text = txt
+		hud_voice.visible = txt != ""
+		_layout_hud()
+
+
+## Portrait shows less side-to-side, so the camera widens its view and pulls back
+## a little; landscape goes back to the classic framing. Eased, never snapped,
+## unless `snap` (first frame or under the rotate fade).
+func _camera_targets(snap: bool) -> void:
+	if camera == null:
+		return
+	var s := get_viewport().get_visible_rect().size
+	var aspect := s.x / maxf(s.y, 1.0)
+	if aspect >= 1.0:
+		cam_fov_target = 70.0
+		cam_dist_target = 7.5
+	else:
+		# Keep roughly a 52 degree horizontal view on tall screens.
+		var h := deg_to_rad(52.0)
+		cam_fov_target = clampf(rad_to_deg(2.0 * atan(tan(h / 2.0) / aspect)), 70.0, 92.0)
+		cam_dist_target = 9.0
+	if snap:
+		camera.fov = cam_fov_target
+		cam_dist = cam_dist_target
 
 
 func _on_jump() -> void:
@@ -358,6 +576,7 @@ func _on_jump() -> void:
 
 
 func _leave_game() -> void:
+	voice.shutdown()
 	net.leave()
 	if host_server:
 		host_server.stop()
@@ -370,6 +589,12 @@ func _leave_game() -> void:
 		hud_layer.queue_free()
 		hud_layer = null
 		hud_root = null
+		hud_buttons = null
+		voice_btn = null
+		mic_btn = null
+		hud_toast = null
+	touch = null
+	camera = null
 	player = null
 	music = null
 	remotes.clear()
@@ -399,6 +624,7 @@ func _on_joined(welcome: Dictionary) -> void:
 		if p is Dictionary:
 			_add_remote(p)
 	hud_banner.visible = false
+	voice.on_joined(welcome)
 	if music_on and music and not music.playing:
 		music.start()
 
@@ -417,6 +643,8 @@ func _add_remote(p: Dictionary) -> void:
 
 func _on_message(msg: Dictionary) -> void:
 	if world == null:
+		return
+	if voice.on_message(msg):
 		return
 	match msg.t:
 		"snap":
@@ -508,22 +736,33 @@ func _process(delta: float) -> void:
 		player.set_gravity_sign(g)
 		flips_seen += 1
 	# Camera look (flips with gravity so "down" stays under your feet)
-	var look := touch.consume_look()
-	cam_yaw -= look.x * 0.006
-	cam_pitch = clampf(cam_pitch - look.y * 0.004, -1.1, 0.25)
+	# Look speed per dp, so it feels the same on every screen and orientation.
+	var look := touch.consume_look() / ScreenUtil.dp(get_viewport())
+	cam_yaw -= look.x * 0.012
+	cam_pitch = clampf(cam_pitch - look.y * 0.008, -1.1, 0.25)
+	var ease_k := 1.0 - exp(-delta * 6.0)
+	camera.fov = lerpf(camera.fov, cam_fov_target, ease_k)
+	cam_dist = lerpf(cam_dist, cam_dist_target, ease_k)
 	player.camera_yaw = cam_yaw
 	var up := Vector3.UP * player.gravity_sign
 	var pivot := player.global_position + up * 1.6
-	var offset := Vector3(0, 0, 7.5).rotated(Vector3.RIGHT, cam_pitch * player.gravity_sign).rotated(Vector3.UP, cam_yaw)
+	var offset := Vector3(0, 0, cam_dist).rotated(Vector3.RIGHT, cam_pitch * player.gravity_sign).rotated(Vector3.UP, cam_yaw)
 	camera.global_position = pivot + offset
 	camera.look_at(pivot, up)
 	# HUD
-	var where := ""
+	var ping := ("%d ms" % net.latency_ms) if net.latency_ms >= 0 else "..."
+	var info := "Room %s  ·  %d players  ·  %s" % [net.room, remotes.size() + 1, ping]
+	var hosts := ""
 	if mode == "host":
 		var ips := _local_ips()
-		where = "  ·  Friends join: %s" % (", ".join(ips) if not ips.is_empty() else "turn on Wi-Fi or hotspot")
-	var ping := ("%d ms" % net.latency_ms) if net.latency_ms >= 0 else "..."
-	hud_info.text = "Room %s  ·  %d players  ·  %s%s" % [net.room, remotes.size() + 1, ping, where]
+		hosts = "Friends join: %s" % (", ".join(ips) if not ips.is_empty() else "turn on Wi-Fi or hotspot")
+	if hud_info.text != info or hud_hosts.text != hosts:
+		hud_info.text = info
+		hud_hosts.text = hosts
+		hud_hosts.visible = hosts != ""
+		_layout_hud()
+	if voice.is_on():
+		_refresh_voice_ui()
 	var t := world_t()
 	var until := BeatClock.until_drop(t)
 	var since := BeatClock.since_drop(t)
@@ -549,10 +788,54 @@ func _physics_process(delta: float) -> void:
 
 # ------------------------------------------------------------------ self-test
 
+## Self-check for tests: every HUD piece inside the screen's safe area, and no two
+## pieces (buttons, info pills, joystick, jump button) overlapping.
+func _layout_report() -> String:
+	var vp := get_viewport()
+	var size := vp.get_visible_rect().size
+	var ins := ScreenUtil.insets(vp)
+	var safe := Rect2(ins.l, ins.t, size.x - ins.l - ins.r, size.y - ins.t - ins.b)
+	var items := {}
+	if hud_buttons:
+		items["buttons"] = hud_buttons.get_global_rect()
+		for p in [["info", hud_info], ["hosts", hud_hosts], ["voice", hud_voice]]:
+			if p[1].visible and p[1].text != "":
+				items[p[0]] = p[1].get_global_rect()
+		if touch and touch.show_touch:
+			var sr := touch.stick_radius()
+			var jr := touch.jump_radius()
+			var sh := touch._stick_home()
+			var jc := touch._jump_center()
+			items["stick"] = Rect2(sh - Vector2(sr, sr), Vector2(sr, sr) * 2.0)
+			items["jump"] = Rect2(jc - Vector2(jr, jr), Vector2(jr, jr) * 2.0)
+	elif menu_root:
+		# The menu scrolls under the gesture bar like any app list; check sides and top only.
+		var m := menu_root.get_global_rect()
+		items["menu"] = Rect2(m.position, Vector2(m.size.x, minf(m.size.y, safe.end.y - m.position.y)))
+	var problems := []
+	var safe_grown := safe.grow(0.5)
+	for n in items:
+		if not safe_grown.encloses(items[n]):
+			problems.append("%s outside safe area %s" % [n, str(items[n])])
+	var names := items.keys()
+	for i in names.size():
+		for j in range(i + 1, names.size()):
+			if items[names[i]].grow(-0.5).intersects(items[names[j]].grow(-0.5)):
+				problems.append("%s overlaps %s" % [names[i], names[j]])
+	var parts := []
+	for n in items:
+		var r: Rect2 = items[n]
+		parts.append("%s=(%d,%d %dx%d)" % [n, r.position.x, r.position.y, r.size.x, r.size.y])
+	return "viewport=%dx%d dp=%.2f orient=%s fov=%.1f problems=%s  %s" % [size.x, size.y, ScreenUtil.dp(vp),
+		orientation, camera.fov if camera else 0.0, str(problems) if not problems.is_empty() else "none", " ".join(parts)]
+
+
 func _start_autotest() -> void:
 	name_edit.text = "Bot%d" % (OS.get_process_id() % 1000)
-	if autotest == "host":
+	if autotest == "host" or autotest == "host_rotate":
 		_on_host()
+	elif autotest == "menu":
+		pass
 	elif autotest.begins_with("join:"):
 		server_edit.text = autotest.substr(5)
 		mode = "online"
@@ -563,12 +846,21 @@ func _autotest_tick(delta: float) -> void:
 	if autotest == "":
 		return
 	autotest_t += delta
+	if autotest.ends_with("_rotate") and autotest_t > 3.0 and not has_meta("rotated"):
+		set_meta("rotated", true)
+		_set_orientation("portrait" if orientation == "landscape" else "landscape")
 	if player:
 		# Walk in a slow circle and hop, like a player would.
 		player.move_input = Vector2(sin(autotest_t * 0.8), cos(autotest_t * 0.8))
 		if fmod(autotest_t, 2.0) < delta:
 			player.jump_pressed = true
 	var limit := float(OS.get_environment("AUTOTEST_SECONDS")) if OS.has_environment("AUTOTEST_SECONDS") else 12.0
+	if autotest == "menu" and autotest_t > limit:
+		print("AUTOTEST LAYOUT ", _layout_report())
+		if OS.has_environment("AUTOTEST_SHOT"):
+			get_viewport().get_texture().get_image().save_png(OS.get_environment("AUTOTEST_SHOT"))
+		get_tree().quit()
+		return
 	if autotest_t > limit:
 		var ball_info := "none"
 		if balls and balls.snapshots_received > 0:
@@ -580,6 +872,7 @@ func _autotest_tick(delta: float) -> void:
 			str(player.global_position) if player else "none", ball_info, t, BeatClock.until_drop(t),
 			_gravity_now(), server_gravity, flips_seen, BeatClock.fold_amount(t), str(music.playing) if music else "none",
 			music.band_energy(30.0, 160.0) if music else 0.0, walls.max_level() if walls else 0.0])
+		print("AUTOTEST LAYOUT ", _layout_report())
 		if OS.has_environment("AUTOTEST_SHOT"):
 			get_viewport().get_texture().get_image().save_png(OS.get_environment("AUTOTEST_SHOT"))
 		get_tree().quit()

@@ -11,6 +11,10 @@ const MAX_PLAYERS_PER_ROOM := 8
 const MAX_ROOMS := 50
 const MAX_CONNECTIONS := 200
 const MAX_MESSAGE_BYTES := 1024
+const MAX_SIGNAL_BYTES := 8192       # voice offers/answers (SDP) are a few KB
+const MAX_SIGNALS_PER_SEC := 80      # ICE candidates arrive in bursts
+const MAX_SDP_CHARS := 7000
+const MAX_ICE_CHARS := 600
 const MAX_MSGS_PER_SEC := 40
 const MAX_BAD_MESSAGES := 20
 const HELLO_TIMEOUT_MS := 5000
@@ -114,8 +118,8 @@ static func encode(data: Dictionary) -> String:
 
 
 ## Returns a Dictionary with a String "t" field, or null.
-static func decode(text: String):
-	if text.length() > MAX_MESSAGE_BYTES:
+static func decode(text: String, max_bytes: int = MAX_MESSAGE_BYTES):
+	if text.length() > max_bytes:
 		return null
 	var parsed = JSON.parse_string(text)
 	if not (parsed is Dictionary):
