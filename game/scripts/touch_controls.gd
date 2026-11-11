@@ -9,6 +9,9 @@ signal action
 ## Optional second button (Pop-Up Panic's BONK). Empty label = only the jump button.
 var action_label := ""
 var jump_label := "JUMP"
+var show_jump := true          # 0.8.0: games without jumping hide the button
+var action_down := false       # 0.8.0: the action button is held (auto-fire)
+var _action_finger := -1
 var action_ready := 1.0     # 0..1, drawn as a ring while the action recharges
 var action_flash := 0.0
 
@@ -158,8 +161,10 @@ func _on_touch(e: InputEventScreenTouch) -> void:
 		if _blocked(e.position):
 			return
 		if action_label != "" and e.position.distance_to(_action_center()) <= action_radius() * 1.2:
+			_action_finger = e.index
+			action_down = true
 			_fire_action()
-		elif e.position.distance_to(_jump_center()) <= jump_radius() * 1.3:
+		elif show_jump and e.position.distance_to(_jump_center()) <= jump_radius() * 1.3:
 			jump.emit()
 		elif e.position.x < _vs().x * 0.5 and e.position.y > maxf(_vs().y * 0.4, _top_limit()) and _stick_finger == -1:
 			_stick_finger = e.index
@@ -170,6 +175,9 @@ func _on_touch(e: InputEventScreenTouch) -> void:
 			_look_finger = e.index
 			_look_last = e.position
 	else:
+		if e.index == _action_finger:
+			_action_finger = -1
+			action_down = false
 		if e.index == _stick_finger:
 			_stick_finger = -1
 			move = Vector2.ZERO
@@ -228,12 +236,13 @@ func _draw() -> void:
 	var knob := base + Vector2(move.x, -move.y) * sr
 	draw_circle(knob, KNOB_RADIUS_DP * k, Color(1, 1, 1, 0.55))
 	var jc := _jump_center()
-	draw_circle(jc, jr, Color(1, 1, 1, 0.22))
-	draw_arc(jc, jr, 0, TAU, 48, Color(1, 1, 1, 0.6), 2.0 * k, true)
 	var font := UiKit.font("anton", 400)
-	var fs := int((13 if action_label != "" else 15) * k)
-	var text_size := font.get_string_size(jump_label, HORIZONTAL_ALIGNMENT_CENTER, -1, fs)
-	draw_string(font, jc + Vector2(-text_size.x / 2.0, fs * 0.35), jump_label, HORIZONTAL_ALIGNMENT_CENTER, -1, fs, Color.WHITE)
+	if show_jump:
+		draw_circle(jc, jr, Color(1, 1, 1, 0.22))
+		draw_arc(jc, jr, 0, TAU, 48, Color(1, 1, 1, 0.6), 2.0 * k, true)
+		var fs := int((13 if action_label != "" else 15) * k)
+		var text_size := font.get_string_size(jump_label, HORIZONTAL_ALIGNMENT_CENTER, -1, fs)
+		draw_string(font, jc + Vector2(-text_size.x / 2.0, fs * 0.35), jump_label, HORIZONTAL_ALIGNMENT_CENTER, -1, fs, Color.WHITE)
 	if action_label != "":
 		var ac := _action_center()
 		var ar := action_radius() * (1.0 + 0.08 * action_flash)
