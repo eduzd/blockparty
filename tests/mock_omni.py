@@ -57,12 +57,20 @@ class H(BaseHTTPRequestHandler):
             msg = {"role": "assistant", "content": None, "reasoning_content": "Thinking... " + json.dumps(LEVEL)}
         elif model == "mock-think":
             msg["content"] = "<think>I will make { a level }</think>" + json.dumps(LEVEL)
+        elif model == "mock-cut" and "can't be finished" in last:
+            msg["content"] = json.dumps(LEVEL)
         elif model == "mock-cut":
             full = json.dumps(LEVEL)
             msg["content"] = full[: full.index('["coin"') + 10]
             finish = "length"
         elif model == "mock-badfirst":
             msg["content"] = json.dumps(LEVEL) if retry else "-- Luau\nlocal Players = game:GetService('Players')"
+        elif model == "mock-broken":
+            if "can't be finished" in last:
+                msg["content"] = json.dumps(LEVEL)
+            else:
+                b = json.loads(json.dumps(LEVEL)); b["goal"] = [50, 30, 50]; b["parts"].append(["block", 50, 28.5, 50, 4, 1, 4, 0, 2])
+                msg["content"] = json.dumps(b)
         elif model == "mock-luau":
             msg["content"] = "-- Luau script\nlocal x = 1"
         elif model == "mock-empty":

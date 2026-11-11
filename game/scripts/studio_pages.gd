@@ -1,6 +1,6 @@
 class_name StudioPages
 extends RefCounted
-## 0.7.0 Studio: describe a game in words, the AI (or the built-in quick builder) makes
+## 0.7.0 Studio: describe a game in words, the AI (only the AI, since 0.7.2) makes
 ## it, you play it at once, change it in words or by hand, and publish it for friends.
 ## Plus the community games list on the Games tab.
 
@@ -21,6 +21,10 @@ var change_text := ""
 var note := ""          # last message from the builder
 var source := ""        # 0.7.2: "ai" or "quick", who built the current game
 var _busy_since := 0
+var ai_error := ""      # last AI failure, shown with a Retry button
+var ai_error_retry := true
+var _last_ask := {}     # what Retry sends again
+var _last_open := false
 var ai_left := -1
 var ai_on := true        # false when the server says the AI builder isn't set up
 var _open_after_ai := false
@@ -57,8 +61,7 @@ func _on_reply(t: String, msg: Dictionary) -> void:
 				if note == "":
 					note = "Built by the quick builder." if source == "quick" else "Built by the AI."
 				# Say where the game came from, also when it opens straight into play.
-				s._toast(("AI built this game" if source == "ai" else "Quick builder made this (the AI couldn't)") if _open_after_ai
-					else ("AI changed your game" if source == "ai" else "Quick builder changed it (the AI couldn't)"))
+				s._toast("AI built this game" if _open_after_ai else "AI changed your game")
 				change_text = ""
 				if _open_after_ai:
 					_open_after_ai = false
@@ -70,8 +73,13 @@ func _on_reply(t: String, msg: Dictionary) -> void:
 					play_current()
 					return
 			else:
+				# 0.7.2: AI only. Show what went wrong with a Retry button, no stand-in game.
+				ai_error = str(msg.get("why", "The AI couldn't build that."))
+				ai_error_retry = bool(msg.get("retry", true))
+				if msg.get("ai_off", false):
+					ai_on = false
 				_open_after_ai = false
-				s._toast(str(msg.get("why", "Couldn't build that.")))
+				s._toast(ai_error)
 			s._mark_dirty()
 		"s_studio_mine_res":
 			mine = msg.get("games", [])
@@ -145,6 +153,10 @@ func _remember() -> void:
 
 
 func _ask(msg: Dictionary, what: String) -> bool:
+	if what == "ai":
+		ai_error = ""
+		_last_ask = msg.duplicate(true)
+		_last_open = _open_after_ai
 	if not s.social.request(msg):
 		s._offline_toast()
 		return false
@@ -154,11 +166,13 @@ func _ask(msg: Dictionary, what: String) -> bool:
 	if what == "ai":
 		# The AI can take a while (two tries of up to 90 s). Never leave the button stuck.
 		var started := _busy_since
-		s.get_tree().create_timer(200.0).timeout.connect(func():
+		s.get_tree().create_timer(330.0).timeout.connect(func():
 			if busy == "ai" and _busy_since == started:
 				busy = ""
 				_open_after_ai = false
-				s._toast("The builder didn't answer. Try again.")
+				ai_error = "The AI didn't answer in time. Try again."
+				ai_error_retry = true
+				s._toast(ai_error)
 				s._mark_dirty())
 	return true
 
@@ -170,15 +184,8 @@ func build_from_words(text: String) -> void:
 		return
 	prompt_text = text
 	if not s.social.is_online():
-		# Offline: the phone builds it with the quick builder.
-		level = PloxLevel.quick_build(text)
-		gid = ""
-		status = "draft"
-		undo.clear()
-		note = "Built on your phone (offline)."
-		source = "quick"
-		s.push({"k": "studio_edit"})
-		play_current()
+		# 0.7.2: games are made by the AI, which needs the internet.
+		s._offline_toast()
 		return
 	_open_after_ai = true
 	_ask({"t": "s_ai_build", "prompt": text}, "ai")
@@ -190,11 +197,7 @@ func change_with_words(text: String) -> void:
 		return
 	change_text = text
 	if not s.social.is_online():
-		_remember()
-		level = PloxLevel.quick_build(text, level)
-		note = "Changed on your phone (offline)."
-		change_text = ""
-		s._mark_dirty()
+		s._offline_toast()
 		return
 	_ask({"t": "s_ai_build", "prompt": text, "base": level}, "ai")
 
@@ -234,10 +237,11 @@ func studio_screen() -> Control:
 		go.disabled = busy != ""
 		if busy == "ai":
 			box.add_child(UiKit.margin(UiKit.empty_state("sparkles", "Building your game...",
-				"The AI is designing your course. This can take up to a minute."), 16, 12, 16, 0))
+				"The AI is planning and building your course, then checking it can be finished. This can take up to a minute."), 16, 12, 16, 0))
+		_error_card(box)
 		if not ai_on:
 			box.add_child(UiKit.margin(UiKit.empty_state("sparkles", "AI not set up yet",
-				"The Plux team hasn't switched on the AI builder yet. For now Studio makes a simpler game from your words."), 16, 12, 16, 0))
+				"The Plux team hasn't switched on the AI builder yet. Games in Studio are made by the AI, so building will work once it's on."), 16, 12, 16, 0))
 		box.add_child(UiKit.margin(go, 16, 12, 16, 0))
 		box.add_child(UiKit.margin(UiKit.label("Try one of these", "title_small", UiKit.c("on_surface"), false), 20, 16, 20, 6))
 		var flow := HFlowContainer.new()
@@ -304,7 +308,7 @@ func _fill_editor(box: VBoxContainer) -> void:
 	var play := UiKit.primary_button("Play it now", "play", play_current)
 	box.add_child(UiKit.margin(play, 16, 12, 16, 0))
 	if source != "":
-		var tag := UiKit.pill("Made by the AI" if source == "ai" else "Made by the quick builder")
+		var tag := UiKit.pill("Made by the AI" if source == "ai" else "Made on your phone")
 		var row := UiKit.hbox(0)
 		row.add_child(tag)
 		box.add_child(UiKit.margin(row, 20, 8, 20, 0))
@@ -318,9 +322,10 @@ func _fill_editor(box: VBoxContainer) -> void:
 	ce.text_changed.connect(func(t): change_text = t)
 	ce.text_submitted.connect(func(t): change_with_words(t))
 	box.add_child(cf[0])
-	var apply := UiKit.primary_button("Changing it..." if busy == "ai" else "Change it", "sparkles", func(): change_with_words(ce.text))
+	var apply := UiKit.primary_button("The AI is changing it..." if busy == "ai" else "Change it", "sparkles", func(): change_with_words(ce.text))
 	apply.disabled = busy != ""
 	box.add_child(UiKit.margin(apply, 16, 10, 16, 0))
+	_error_card(box)
 	var flow := _flow()
 	for c in CHANGES:
 		var t: String = c
@@ -508,3 +513,26 @@ func discover_section(content: VBoxContainer) -> void:
 		play.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		h.add_child(play)
 		card[1].add_child(UiKit.margin(h, 16, 10, 16, 10))
+
+
+## 0.7.2: the AI's error with a Retry button (AI only, no stand-in games).
+func _error_card(box: VBoxContainer) -> void:
+	if ai_error == "" or busy != "":
+		return
+	var retry: Control = null
+	if ai_error_retry and not _last_ask.is_empty():
+		retry = UiKit.primary_button("Retry", "arrow-path", func():
+			_open_after_ai = _last_open
+			var m := _last_ask.duplicate(true)
+			m.erase("rid")
+			_ask(m, "ai"))
+	box.add_child(UiKit.margin(UiKit.empty_state("x-circle", "The AI couldn't build it", ai_error, retry), 16, 12, 16, 0))
+
+
+func retry_last() -> void:
+	if _last_ask.is_empty():
+		return
+	_open_after_ai = _last_open
+	var m := _last_ask.duplicate(true)
+	m.erase("rid")
+	_ask(m, "ai")

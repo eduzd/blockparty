@@ -107,18 +107,18 @@ async function hello(c, extra) { send(c, Object.assign({ t: 's_hello', v: 1 }, e
       const ed = await ask(p, { t: 's_ai_build', prompt: 'make it harder', base: b.level }, 's_ai_res', 40000);
       ok(ed && ed.ok && !ed.quick, 'changing the game in words also goes through the AI');
 
-      // Agent switched off: quick builder with the "AI not set up" flag.
+      // Agent switched off: 0.7.2 AI only, so a clear "not set up" error and no game.
       r = await ask(ad, { t: 'a_agent_save', agent: Object.assign({}, rules, { on: false }) }, 'a_ok');
       const mine2 = await ask(p, { t: 's_studio_mine' }, 's_studio_mine_res');
       ok(mine2 && mine2.ai === false, 'agent off: Studio shows "AI not set up yet"');
       const q = await ask(p, { t: 's_ai_build', prompt: 'ice race' }, 's_ai_res', 20000);
-      ok(q && q.ok && q.quick && q.ai_off && q.level.parts.length >= 3, 'agent off: word builder still makes a game');
+      ok(q && q.ok === false && q.ai_off && !q.level, 'agent off: clear "AI isn\'t switched on" error, no stand-in game');
 
-      // AI down: word builder takes over quietly.
+      // AI down: 0.7.2 error with Retry, no stand-in game.
       await ask(ad, { t: 'a_agent_save', agent: rules }, 'a_ok');
       await ask(ad, { t: 'a_ai_set', base: 'http://127.0.0.1:1/v1', model: 'mock-model' }, 'a_ok');
       const f = await ask(p, { t: 's_ai_build', prompt: 'sky islands' }, 's_ai_res', 40000);
-      ok(f && f.ok && f.quick && f.level.parts.length >= 3, 'AI unreachable: word builder makes the game, no error page');
+      ok(f && f.ok === false && f.retry === true && !f.level, 'AI unreachable: error with Retry, no stand-in game (' + (f && f.why) + ')');
 
       // Clear the key: not set up.
       await ask(ad, { t: 'a_ai_set', base: MOCK, model: 'mock-model', clear_key: true }, 'a_ok');

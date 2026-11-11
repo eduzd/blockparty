@@ -981,14 +981,9 @@ func _ai_build(me: String, msg: Dictionary, reply: Callable, now: int) -> void:
 		return
 	var ag := agent("game_editor" if msg.get("base") is Dictionary else "studio_builder")
 	if not ai_ready() or not bool(ag.get("on", true)):
-		# No AI service set up yet (or the agent is switched off): the built-in word
-		# builder makes the game instead, so Studio still works, and Studio says so.
-		var base0 = PloxLevel.clean(msg.base, cfg.i("studio_max_parts")) if msg.get("base") is Dictionary else null
-		var lv := PloxLevel.clean(PloxLevel.quick_build(prompt, base0), cfg.i("studio_max_parts"))
-		lv.title = filter_text(lv.title)
-		count("ai_quick")
-		reply.call({"t": "s_ai_res", "ok": true, "level": lv, "quick": true, "left": -1, "ai_off": true,
-			"why": "The AI builder isn't set up yet, so the quick builder made this one."})
+		# 0.7.2: Studio games are made by the AI only. No AI, no game, and Studio says why.
+		reply.call({"t": "s_ai_res", "ok": false, "ai_off": true, "retry": false,
+			"why": "The AI builder isn't switched on yet. The Plux team needs to set it up in Plux Admin."})
 		return
 	if _ai_busy.has(me):
 		fail.call("Your last game is still being built.")
@@ -1021,12 +1016,12 @@ func _ai_build(me: String, msg: Dictionary, reply: Callable, now: int) -> void:
 				"why": "Built by the AI in %.0f seconds." % (ms / 1000.0),
 				"left": maxi(0, ai_cap_for(me) - _ai_used_today(me))})
 		else:
-			# The AI failed: hand back a game from the word builder so the player isn't stuck,
-			# and say so plainly.
-			var lv2 := PloxLevel.clean(PloxLevel.quick_build(prompt, change if not change.is_empty() else null), cfg.i("studio_max_parts"))
-			lv2.title = filter_text(lv2.title)
-			reply.call({"t": "s_ai_res", "ok": true, "level": lv2, "quick": true, "source": "quick", "ai_error": why.substr(0, 200),
-				"why": "The AI couldn't build this one, so the quick builder made a simpler version. (%s)" % _player_ai_reason(why),
+			# 0.7.2: no fallback game. Say what went wrong and let the player try again.
+			# A failed build doesn't use up one of the player's daily builds.
+			if _ai_used_today(me) > 0:
+				count("ai:" + me, -1)
+			reply.call({"t": "s_ai_res", "ok": false, "retry": true, "source": "ai", "ai_error": _player_ai_reason(why),
+				"why": "The AI couldn't build this game: %s. Try again." % _player_ai_reason(why),
 				"left": maxi(0, ai_cap_for(me) - _ai_used_today(me))}), false, {"agent": ag}, change)
 
 
@@ -1042,7 +1037,11 @@ static func _player_ai_reason(why: String) -> String:
 		return "the AI service is offline"
 	if why.contains("HTTP 404"):
 		return "the AI address is wrong"
-	return "its answer couldn't be used"
+	if why.contains("can't be finished"):
+		return "its course couldn't be finished, even after fixing"
+	if why.contains("empty answer"):
+		return "the AI sent back an empty answer"
+	return "its answer wasn't a game it could build"
 
 
 func _ai_used_today(uid: String) -> int:
@@ -1087,8 +1086,10 @@ func _ai_call(prompt: String, done: Callable, test := false, override := {}, cha
 		messages = [{"role": "system", "content": sys},
 			{"role": "user", "content": "Build this game: " + prompt + "\n\nReply with the level JSON only."}]
 		if not change.is_empty() and change.get("parts", []).size() > 0:
-			messages[1].content = "Here is my current game as JSON:\n" + JSON.stringify(change) \
-				+ "\n\nChange it like this: " + prompt + "\nKeep everything I didn't ask to change. Reply with the whole updated game in the same JSON format, JSON only."
+			messages[1].content = "Here is my current game as JSON:\n" + JSON.stringify({"title": change.title, "sky": change.sky, "spawn": change.spawn, "goal": change.goal, "parts": change.parts}) \
+				+ "\n\nChange it like this: " + prompt \
+				+ "\nChange ONLY what I asked. Keep every other part exactly as it is (same kind, position, size, rotation and colour), keep the title unless I asked to rename it, and keep it finishable. " \
+				+ "In the plan, list just the changes you made. Reply with the whole updated game in the same JSON format, JSON only."
 	var st := {"try": 1, "t0": Time.get_ticks_msec()}
 	_ai_try(url, model, key, messages, test, ag, done, st)
 
@@ -1202,7 +1203,22 @@ func _ai_try(url: String, model: String, key: String, messages: Array, test: boo
 		if level.parts.size() < 3:
 			fail.call("too few usable parts (%d of %d): %s" % [level.parts.size(), raw_n, PloxAi.preview(content, 100)], content, true)
 			return
-		var info := "AI, %d parts%s%s" % [level.parts.size(), ", 2nd try" if int(st.try) > 1 else "", ", cut off and closed" if r.finish == "length" else ""]
+		# Check it can really be finished; if not, tell the AI exactly where and let it fix it.
+		var probs := PloxLevel.playability(level)
+		if not probs.is_empty():
+			var fixes := int(st.get("fixes", 0))
+			if fixes < 2:
+				st["fixes"] = fixes + 1
+				print("[ai] level not finishable, asking the AI to fix it (%d): %s" % [fixes + 1, str(probs[0]).substr(0, 160)])
+				var m3: Array = messages.duplicate(true)
+				m3.append({"role": "assistant", "content": JSON.stringify({"title": level.title, "sky": level.sky, "spawn": level.spawn, "goal": level.goal, "parts": level.parts})})
+				m3.append({"role": "user", "content": PloxLevel.ai_repair_note(probs)})
+				_ai_try(url, model, key, m3, test, ag, done, st)
+				return
+			fail.call("the AI's level still can't be finished after %d fixes: %s" % [fixes, str(probs[0]).substr(0, 220)], "", false)
+			return
+		var info := "AI, %d parts%s%s%s" % [level.parts.size(), ", 2nd try" if int(st.try) > 1 else "",
+			(", fixed %dx" % int(st.fixes)) if int(st.get("fixes", 0)) > 0 else "", ", cut off and closed" if r.finish == "length" else ""]
 		print("[ai] ok in %d ms: %s, '%s'" % [Time.get_ticks_msec() - int(st.t0), info, str(level.title)])
 		level["_info"] = info
 		done.call(true, level, ""))

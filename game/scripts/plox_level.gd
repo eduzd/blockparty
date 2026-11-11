@@ -177,35 +177,168 @@ static func check(d: Dictionary) -> String:
 	return ""
 
 
+# ------------------------------------------------------------------ 0.7.2 playability
+## The real movement numbers in studio_play / LocalPlayer: jump 9 m/s up, gravity 24,
+## run 7 m/s (9.5 on ice). A normal jump rises 1.7 m and crosses about 5 m; a jump pad
+## launches at 19 m/s (about 7.5 m up, 10 m across). Movers slide 4 m each way.
+const JUMP_UP := 1.5          # step up a normal jump can always make
+const JUMP_GAP := 4.0         # edge-to-edge gap a normal jump can always make
+const PAD_UP := 6.5
+const PAD_GAP := 8.5
+const MOVER_REACH := 4.0
+const STANDABLE := ["block", "ice", "bounce", "checkpoint", "mover"]
+
+
+## Footprint of a part on the ground: [minx, maxx, minz, maxz, top].
+static func _foot(p: Array) -> Array:
+	var r := deg_to_rad(float(p[7]))
+	var sx := float(p[4])
+	var sz := float(p[6])
+	var cx := float(p[1])
+	var cz := float(p[3])
+	var hx: float = absf(cos(r)) * sx / 2.0 + absf(sin(r)) * sz / 2.0
+	var hz: float = absf(sin(r)) * sx / 2.0 + absf(cos(r)) * sz / 2.0
+	var f := [cx - hx, cx + hx, cz - hz, cz + hz, float(p[2]) + float(p[5]) / 2.0]
+	if p[0] == "mover":   # it slides along its rotation direction
+		var ax := absf(cos(r)) * MOVER_REACH
+		var az := absf(sin(r)) * MOVER_REACH
+		f = [f[0] - ax, f[1] + ax, f[2] - az, f[3] + az, f[4]]
+	return f
+
+
+static func _gap(a: Array, b: Array) -> float:
+	var dx: float = maxf(0.0, maxf(float(a[0]) - float(b[1]), float(b[0]) - float(a[1])))
+	var dz: float = maxf(0.0, maxf(float(a[2]) - float(b[3]), float(b[2]) - float(a[3])))
+	return sqrt(dx * dx + dz * dz)
+
+
+static func _under(pt: Array, parts: Array) -> int:
+	var best := -1
+	var best_top := -INF
+	for i in parts.size():
+		var p: Array = parts[i]
+		if not STANDABLE.has(p[0]):
+			continue
+		var f := _foot(p)
+		if pt[0] >= f[0] - 0.6 and pt[0] <= f[1] + 0.6 and pt[2] >= f[2] - 0.6 and pt[2] <= f[3] + 0.6 \
+				and pt[1] >= f[4] - 0.6 and pt[1] - f[4] < 6.0 and f[4] > best_top:
+			best = i
+			best_top = f[4]
+	return best
+
+
+## Can a player get from part a to part b?
+static func _hop(pa: Array, fa: Array, fb: Array) -> bool:
+	var g := _gap(fa, fb)
+	var up: float = fb[4] - fa[4]
+	if pa[0] == "bounce" and up <= PAD_UP and g <= PAD_GAP:
+		return true
+	if up <= JUMP_UP:
+		var reach := JUMP_GAP + (clampf(-up, 0.0, 8.0) * 0.45)   # dropping down carries you further
+		if pa[0] == "ice":
+			reach += 1.0
+		return g <= reach
+	return false
+
+
+## Returns a list of problems, empty when the course can be finished.
+static func playability(d: Dictionary) -> Array:
+	var probs := []
+	var parts: Array = d.get("parts", [])
+	var si := _under(d.spawn, parts)
+	var gi := _under(d.goal, parts)
+	if si < 0:
+		probs.append("There is no platform right under the spawn point %s. Put spawn 1 m above the top of the first platform." % str(d.spawn))
+	if gi < 0:
+		probs.append("There is no platform right under the goal %s. Put the goal 1 m above the top of the last platform." % str(d.goal))
+	if si < 0 or gi < 0:
+		return probs
+	var feet := []
+	for p in parts:
+		feet.append(_foot(p) if STANDABLE.has(p[0]) else [])
+	var seen := {si: true}
+	var queue := [si]
+	while not queue.is_empty():
+		var i: int = queue.pop_front()
+		if i == gi:
+			return probs
+		for j in parts.size():
+			if seen.has(j) or feet[j].is_empty():
+				continue
+			if _hop(parts[i], feet[i], feet[j]):
+				seen[j] = true
+				queue.append(j)
+	# Not reachable: say where the path breaks, so the AI can fix that spot.
+	var best_d := INF
+	var from := -1
+	var to := -1
+	for i in seen.keys():
+		for j in parts.size():
+			if seen.has(j) or feet[j].is_empty():
+				continue
+			var dd := _gap(feet[i], feet[j]) + maxf(0.0, feet[j][4] - feet[i][4]) * 2.0
+			if dd < best_d:
+				best_d = dd
+				from = i
+				to = j
+	if from >= 0:
+		var fa: Array = feet[from]
+		var fb: Array = feet[to]
+		probs.append("The goal can't be reached from the spawn. The path breaks between part #%d (%s, top at y=%.1f) and part #%d (%s, top at y=%.1f): the gap is %.1f m and the step up is %.1f m. A normal jump crosses at most %.1f m and climbs at most %.1f m; a bounce pad climbs up to %.1f m. Add or move platforms there."
+			% [from, parts[from][0], fa[4], to, parts[to][0], fb[4], _gap(fa, fb), fb[4] - fa[4], JUMP_GAP, JUMP_UP, PAD_UP])
+	else:
+		probs.append("The goal can't be reached from the spawn.")
+	return probs
+
+
 ## The instructions the server gives the AI. It must answer with JSON only.
 static func ai_system_prompt(max_parts: int) -> String:
-	return ("You are the level builder for Plux, a mobile 3D obstacle-course (obby) game. "
-		+ "Your whole reply must be ONE JSON object: start with { and end with }. No prose, no markdown, no code fences, no explanation, no code in any language.\n"
-		+ "Players often paste big ideas: a Roblox game, a horror or racing game, Luau scripts, menus, monsters, shops. You cannot write code or add new systems. "
-		+ "Instead, turn the idea into the closest obstacle course you can build from the parts below, and make its theme obvious: "
-		+ "pick the matching sky and colours, name it after their idea, and shape the course to tell their story "
-		+ "(a horror idea: night or storm sky, dark slate and purple platforms, lava pits as the danger, a chase-like run with hammers; "
-		+ "an ice idea: ice platforms and light blue; a space idea: night sky, jump pads between floating islands; a race: a long fast path with movers).\n"
-		+ "Schema: {\"title\": string (max 40 chars), \"sky\": 0-4 (0 day, 1 sunset, 2 night, 3 candy, 4 storm), "
-		+ "\"spawn\": [x,y,z], \"goal\": [x,y,z], \"parts\": [[kind, x, y, z, sx, sy, sz, rotYdegrees, color], ...]}\n"
-		+ "kind is one of: block (solid platform), lava (touch = back to checkpoint), bounce (jump pad, launches up), "
-		+ "spinner (a bar that rotates around its centre and knocks players), mover (platform sliding back and forth along its rotation direction), "
-		+ "coin (star to collect, size 1), ice (slippery platform), checkpoint (respawn pad). "
-		+ "Use several different kinds, and every kind the player asks for.\n"
-		+ "Units are metres, y is up, x and z between -60 and 60, y between 0 and 50, sizes 0.5 to 24. color is 0-9: "
-		+ "0 blue, 1 light blue, 2 white, 3 slate, 4 orange, 5 yellow, 6 green, 7 purple, 8 pink, 9 cyan. "
-		+ "Positions are the CENTRE of each part. The player jumps about 2.2 m high and 5 m far, so gaps between platforms must be under 4.5 m and steps up under 2 m (or use a bounce pad). "
-		+ "Spawn must be 1 m above the top of the first platform; goal 1 m above the top of the last platform. "
-		+ "Use between 12 and %d parts. Make it fun, fair and beatable in 1 to 3 minutes, with a clear path from spawn to goal.\n"
-		+ "Example of the format (a tiny course; yours should be bigger and match the player's idea): "
-		+ "{\"title\": \"Lava Hop\", \"sky\": 1, \"spawn\": [0, 2, 0], \"goal\": [0, 4, -24], \"parts\": ["
-		+ "[\"block\", 0, 0.5, 0, 6, 1, 6, 0, 6], [\"lava\", 0, 0.2, -6, 6, 0.4, 4, 0, 4], [\"block\", 0, 0.5, -10, 4, 1, 4, 0, 0], "
-		+ "[\"bounce\", 0, 1.2, -14, 2, 0.4, 2, 0, 8], [\"coin\", 0, 3, -14, 1, 1, 1, 0, 5], [\"spinner\", 0, 3.6, -20, 8, 0.8, 0.8, 0, 3], "
-		+ "[\"block\", 0, 2.5, -20, 5, 1, 5, 0, 1], [\"block\", 0, 2.5, -24, 6, 1, 6, 0, 2]]}") % max_parts
+	return ("You are the Studio Builder for Plux, a mobile 3D game platform. Players describe a game and you design it as a level for the Plux obstacle-course engine. "
+		+ "Your whole reply is ONE JSON object: it starts with { and ends with }. No prose, no markdown, no code fences, no code in any language.\n\n"
+		+ "THE ENGINE. A level is a list of parts in a 3D world. Units are metres, y is up. The player runs at 7 m/s, a normal jump rises 1.7 m and lasts 0.75 s. "
+		+ "Rules for a fair course: an edge-to-edge gap between platforms at the same height must be at most 3.5 m; a step up must be at most 1.2 m; "
+		+ "to climb higher use a bounce pad (it launches the player about 7 m up and up to 8 m across). Dropping down is always fine.\n"
+		+ "Parts: [kind, x, y, z, sx, sy, sz, rotY, color]. x y z is the CENTRE of the part (so its top is y + sy/2). sx sy sz are its size (0.5 to 24). rotY is degrees around the vertical axis. color is 0-9.\n"
+		+ "Kinds:\n"
+		+ "- block: solid platform, floor, wall, bridge, stair step or tower. Typical 4x1x4; a narrow beam is 1.2x0.6x8.\n"
+		+ "- ice: slippery platform, the player slides and runs faster. Same sizes as block.\n"
+		+ "- lava: deadly surface, touching it sends the player back to the last checkpoint. Use it as pits beside or between platforms, or as a floor under jumps. Typical 4x0.5x4, keep its top below the platforms around it.\n"
+		+ "- bounce: jump pad, launches the player high. 2x0.4x2. Put the higher platform within 8 m.\n"
+		+ "- spinner: a hammer bar that spins around its centre and knocks players off. 8x0.8x0.8, centre it about 1 m above the platform it sweeps. The platform under it should be wide (5 m or more).\n"
+		+ "- mover: a moving platform that slides 4 m back and forth along its rotY direction (0 = along x, 90 = along z). 3x0.6x3. Great for crossing big gaps or lava.\n"
+		+ "- coin: a star to collect, 1x1x1, float it 1 to 2 m above a platform. Put 3 to 10 along the route and as rewards on risky side paths.\n"
+		+ "- checkpoint: a respawn pad, 2x0.3x2, laid on top of a platform (y = platform top + 0.15). Put one every 5 to 8 platforms and after every hard section.\n"
+		+ "Colors: 0 blue, 1 light blue, 2 white, 3 slate grey, 4 orange, 5 yellow, 6 green, 7 purple, 8 pink, 9 cyan. Pick a palette that fits the theme and use it consistently.\n"
+		+ "Sky: 0 day, 1 sunset, 2 night, 3 candy (pastel pink), 4 storm.\n"
+		+ "World limits: x and z between -60 and 60, y between 0 and 50. Use the space: courses can wind, climb, zig-zag and spiral, not only go straight.\n\n"
+		+ "HOW TO WORK. First think about the player's idea and write a short plan inside the JSON, then build the level from that plan:\n"
+		+ "{\"plan\": {\"theme\": \"what it looks and feels like\", \"palette\": [colors], \"sky\": 0-4, \"sections\": [\"section 1: ...\", \"section 2: ...\", ...], \"pieces\": [\"which kinds and why\"]}, "
+		+ "\"title\": \"short name, max 40 chars\", \"sky\": 0-4, \"spawn\": [x,y,z], \"goal\": [x,y,z], \"parts\": [[kind,x,y,z,sx,sy,sz,rotY,color], ...]}\n"
+		+ "Plan 3 to 6 sections, each with its own idea (for example: a warm-up path, a lava bridge, a hammer gauntlet, a mover crossing, a jump-pad climb, a final tower). "
+		+ "spawn is 1 m above the top of the first platform, goal is 1 m above the top of the last platform. Every platform on the route must be reachable from the one before it.\n"
+		+ "Use between 20 and %d parts. Make it fun, fair and beatable in 1 to 3 minutes.\n\n"
+		+ "FOLLOW THE PLAYER'S IDEA. The game must clearly match what they asked for: its title, sky, colours, which pieces you use and the shape of the course should all tell their story. "
+		+ "If they name pieces (lava, hammers, ice, jump pads, moving platforms, stars, checkpoints), use them prominently. "
+		+ "If they ask for something the engine can't do (cars, guns, monsters, shops, scripts, menus), keep their theme and build the closest obstacle course: "
+		+ "a horror or ghost idea becomes a night or storm course in slate, purple and white with lava pits and hammers; a space idea becomes floating islands linked by jump pads under a night sky; "
+		+ "a race becomes a long winding path with movers and ice; a candy idea uses the candy sky with pink and yellow. Never refuse and never explain, just build.\n\n"
+		+ "Small example of the format (yours is bigger and follows the player's idea): "
+		+ "{\"plan\": {\"theme\": \"sunset lava hop\", \"palette\": [4, 5, 2], \"sky\": 1, \"sections\": [\"start pad\", \"lava gap\", \"jump pad climb\", \"hammer finish\"], \"pieces\": [\"lava\", \"bounce\", \"spinner\", \"coin\"]}, "
+		+ "\"title\": \"Lava Hop\", \"sky\": 1, \"spawn\": [0, 2, 0], \"goal\": [0, 6.5, -26], \"parts\": ["
+		+ "[\"block\", 0, 0.5, 0, 6, 1, 6, 0, 2], [\"lava\", 0, 0.1, -6, 6, 0.4, 5, 0, 4], [\"block\", 0, 0.5, -10, 4, 1, 4, 0, 5], "
+		+ "[\"bounce\", 0, 1.2, -10, 2, 0.4, 2, 0, 8], [\"coin\", 0, 4, -13, 1, 1, 1, 0, 5], [\"block\", 0, 4.5, -17, 6, 1, 6, 0, 4], "
+		+ "[\"checkpoint\", 0, 5.15, -17, 2, 0.3, 2, 0, 6], [\"spinner\", 0, 6, -17, 8, 0.8, 0.8, 0, 3], [\"block\", 0, 4.5, -22, 4, 1, 4, 0, 5], [\"block\", 0, 5, -26, 6, 1, 6, 0, 2]]}") % max_parts
 
 
 ## Sent when the first reply wasn't usable, so the second try is stricter.
-const AI_RETRY_NOTE := "Your last reply could not be used because it was not a single valid JSON object in the level format. Reply again with ONLY the JSON object: start with { and end with }, no other text, no code fences, no code. Keep it under 50 parts so it fits."
+const AI_RETRY_NOTE := "Your last reply could not be used because it was not a single valid JSON object in the level format. Reply again with ONLY the JSON object: start with { and end with }, no other text, no code fences, no code. Keep the plan short and use at most 60 parts so it fits."
+
+
+## Sent when the level parsed but can't be finished.
+static func ai_repair_note(problems: Array) -> String:
+	return "I checked your level in the engine and it can't be finished yet:\n- " + "\n- ".join(problems) \
+		+ "\nFix only those spots (add, move or resize platforms, or add a bounce pad) and keep the rest of the level and its theme the same. Reply with the whole fixed level as ONE JSON object in the same format, JSON only."
+
 
 
 # ------------------------------------------------------------------ quick builder

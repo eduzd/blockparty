@@ -15,7 +15,7 @@ async function ask(c, m, t, ms = 60000) { const r = rid++; c.ws.send(JSON.string
   const li = await ask(ad, { t: 'a_login', pw: process.env.ADMIN_PW || 'localadmin123' }, 'a_login_res');
   ok(li && li.ok, 'admin signs in');
   const cases = [['mock-model', true], ['mock-fenced', true], ['mock-trailing', true], ['mock-wrapped', true], ['mock-parts', true],
-    ['mock-reasoning', true], ['mock-think', true], ['mock-cut', true], ['mock-sse', true], ['mock-badfirst', true], ['mock-luau', false], ['mock-empty', false]];
+    ['mock-reasoning', true], ['mock-think', true], ['mock-cut', true], ['mock-sse', true], ['mock-badfirst', true], ['mock-broken', true], ['mock-luau', false], ['mock-empty', false]];
   for (const [model, want] of cases) {
     await ask(ad, { t: 'a_ai_set', base: MOCK, model, key: 'test-omni-key-1234' }, 'a_ok');
     const r = await ask(ad, { t: 'a_ai_test', full: true }, 'a_ai_test_res');
@@ -34,6 +34,20 @@ async function ask(c, m, t, ms = 60000) { const r = rid++; c.ws.send(JSON.string
   const g = await ask(ad, { t: 'a_ai_get' }, 'a_ai_res');
   const log = (g && g.log) || [];
   ok(log.length > 5 && log.some(e => e.ok && /AI, \d+ parts/.test(e.why)) && log.some(e => !e.ok && e.why.length > 10), 'usage log has success details and real errors');
+  // AI only: a failed build gives an error with Retry, never a stand-in game.
+  await ask(ad, { t: 'a_ai_set', base: MOCK, model: 'mock-luau', key: 'test-omni-key-1234' }, 'a_ok');
+  const pl = await conn();
+  const nm = 'shp' + Date.now().toString(36).slice(-6);
+  const su = await ask(pl, { t: 's_signup', username: nm, password: 'secret12', birthday: '2000-02-02' }, 's_signup_res', 30000);
+  pl.ws.send(JSON.stringify({ t: 's_hello', v: 1, token: su && su.token, rid: rid++ }));
+  await sleep(1500);
+  let b = await ask(pl, { t: 's_ai_build', prompt: 'a lava obby with hammers' }, 's_ai_res', 120000);
+  ok(b && b.ok === false && b.retry === true && !b.level, 'failed AI build: error + Retry, no fallback game (' + (b && b.why) + ')');
+  await ask(ad, { t: 'a_ai_set', base: MOCK, model: 'mock-broken', key: 'test-omni-key-1234' }, 'a_ok');
+  b = await ask(pl, { t: 's_ai_build', prompt: 'a lava obby with hammers' }, 's_ai_res', 120000);
+  ok(b && b.ok && b.source === 'ai' && b.level && b.level.parts.length > 3, 'unfinishable level gets fixed by the AI (' + (b && (b.why || '')) + ')');
+  const g2 = await ask(ad, { t: 'a_ai_get' }, 'a_ai_res');
+  ok(g2 && g2.log && g2.log.some(e => /fixed 1x/.test(e.why)), 'usage log shows the fix: ' + JSON.stringify(g2 && g2.log && g2.log[0]));
   console.log(`${passes} passed, ${fails} failed`);
   process.exit(fails ? 1 : 0);
 })();
