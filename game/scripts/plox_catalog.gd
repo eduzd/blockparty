@@ -67,7 +67,8 @@ static func clean_item(d) -> Dictionary:
 		"col": col, "price": clampi(int(price) if (price is int or price is float) else 100, 0, 10000000),
 		"rare": bool(d.get("rare", false)) if d.get("rare", false) is bool else false,
 		"stock": clampi(int(stock) if (stock is int or stock is float) else -1, -1, 1000000),
-		"hidden": bool(d.get("hidden", false)) if d.get("hidden", false) is bool else false}
+		"hidden": bool(d.get("hidden", false)) if d.get("hidden", false) is bool else false,
+		"pro": bool(d.get("pro", false)) if d.get("pro", false) is bool else false}
 	if out.name == "":
 		out.name = id
 	return out

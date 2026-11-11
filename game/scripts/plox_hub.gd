@@ -25,6 +25,8 @@ const SCHEMA := [
 	"create table if not exists plox_ai_log (id bigserial primary key, ts bigint not null, uid text not null, prompt text not null, ok boolean not null, ms int not null default 0, why text not null default '')",
 	"create table if not exists plox_trades (id text primary key, from_uid text not null, to_uid text not null, give text not null default '', get_oids text not null default '', coins_give bigint not null default 0, coins_get bigint not null default 0, status text not null default 'open', created bigint not null default 0, updated bigint not null default 0, why text not null default '')",
 	"create table if not exists plox_orders (id text primary key, uid text not null, pack text not null, plux bigint not null, price text not null default '0', cur text not null default 'USD', provider text not null default '', mode text not null default 'sandbox', status text not null default 'created', created bigint not null default 0, paid bigint not null default 0, pay_ref text unique)",
+	"create table if not exists plox_outfits (uid text primary key, data text not null default '[]')",
+	"create table if not exists plox_pro (uid text primary key, tier text not null, until_ts bigint not null default 0, source text not null default '', auto_renew boolean not null default false, last_allow bigint not null default 0)",
 	"create table if not exists plox_daily (day int not null, k text not null, n bigint not null default 0, primary key (day, k))",
 ]
 const LOADS := [
@@ -40,6 +42,8 @@ const LOADS := [
 	["ai_log", "select id, ts, uid, prompt, ok, ms, why from plox_ai_log order by id desc limit 300"],
 	["trades", "select id, from_uid, to_uid, give, get_oids, coins_give, coins_get, status, created, updated, why from plox_trades where status = 'open' or updated > extract(epoch from now())::bigint - 30 * 86400"],
 	["orders", "select id, uid, pack, plux, price, cur, provider, mode, status, created, paid, pay_ref from plox_orders where status in ('created', 'paid') or created > extract(epoch from now())::bigint - 30 * 86400"],
+	["outfits", "select uid, data from plox_outfits"],
+	["pro", "select uid, tier, until_ts, source, auto_renew, last_allow from plox_pro"],
 	["daily", "select day, k, n from plox_daily where day > (extract(epoch from now())::bigint / 86400) - 35"],
 ]
 const ADMIN_LOCK_FAILS := 5
@@ -201,6 +205,11 @@ func load_from(data: Dictionary) -> void:
 		daily[d][str(r.k)] = int(r.n)
 	trade.load_rows(data.get("trades", []))
 	pay.load_rows(data.get("orders", []))
+	pay.load_pro(data.get("pro", []))
+	for r in data.get("outfits", []):
+		var o = JSON.parse_string(str(r.data))
+		if o is Array:
+			outfits[str(r.uid)] = o
 	loaded = true
 
 
@@ -248,6 +257,8 @@ func card_extra(uid: String, out: Dictionary) -> void:
 		out["eq"] = eq
 	if playing.has(uid) and hub._online(uid):
 		out["playing"] = _playing_full(uid)
+	if pay.is_pro(uid):
+		out["pro"] = true
 
 
 func _playing_label(p: String) -> Dictionary:
@@ -308,7 +319,7 @@ func _eco(uid: String) -> Dictionary:
 		var o: Dictionary = owned[uid][oid]
 		inv.append({"oid": oid, "item": o.item, "serial": int(o.serial)})
 	return {"coins": int(w.coins), "eq": w.eq, "inv": inv, "daily_ready": int(w.daily_day) < today(_now()),
-		"daily": cfg.i("coins_daily")}
+		"daily": cfg.i("coins_daily"), "pro": pay.pro_status(uid)}
 
 
 func _shop() -> Array:
@@ -349,6 +360,22 @@ func ticket_uid(t) -> String:
 		tickets.erase(t)
 		return ""
 	return str(e[0])
+
+
+var outfits := {}   # uid -> [{name, eq}]
+
+
+func outfit_cap(uid: String) -> int:
+	var t := pay.tier_of(uid)
+	return maxi(cfg.i("outfits_free"), int(t.get("outfits", 0))) if not t.is_empty() else cfg.i("outfits_free")
+
+
+func _outfits_res(uid: String) -> Dictionary:
+	return {"t": "s_outfits_res", "ok": false, "why": "", "outfits": outfits.get(uid, []), "cap": outfit_cap(uid)}
+
+
+func ai_cap_for(uid: String) -> int:
+	return cfg.i("ai_per_day") + int(pay.tier_of(uid).get("ai_extra", 0))
 
 
 ## Pays a player for playing, inside the shared daily cap. Returns the Plux paid.
@@ -413,7 +440,7 @@ const PLAYER_TYPES := ["s_eco", "s_daily", "s_buy", "s_equip", "s_ticket", "s_pl
 	"s_games", "s_game_get", "s_game_played", "s_game_like", "s_ai_build",
 	"s_inv", "s_trades", "s_trade_offer", "s_trade_accept", "s_trade_decline", "s_trade_cancel",
 	"s_game_done", "s_packs", "s_pay_start", "s_pay_confirm", "s_orders",
-	"s_invite", "s_invite_reply", "s_invite_code"]
+	"s_invite", "s_invite_reply", "s_invite_code", "s_outfits", "s_outfit_save", "s_outfit_del", "s_pro", "s_pro_cancel", "s_pro_renew_test"]
 
 
 func owns(t: String) -> bool:
@@ -631,6 +658,47 @@ func handle(cid: int, me: String, msg: Dictionary, rid, now: int) -> String:
 			reply.call({"t": "s_game_done_res", "gid": gid, "got": got})
 		"s_packs":
 			reply.call(pay.store_info(me))
+		"s_outfits":
+			reply.call(_outfits_res(me))
+		"s_outfit_save":
+			var list: Array = outfits.get(me, [])
+			var cap := outfit_cap(me)
+			var name := str(msg.get("name", "")).strip_edges().substr(0, 20)
+			var eq: Array = wallet(me).eq.duplicate()
+			var res := _outfits_res(me)
+			res.t = "s_outfit_save_res"
+			if eq.is_empty():
+				res.why = "Put something on first."
+			elif list.size() >= cap:
+				res.why = "You can save %d outfits.%s" % [cap, " Plux Pro lets you save more." if not pay.is_pro(me) and cfg.b("f_pro") else ""]
+			else:
+				list.append({"name": name if name != "" else "Outfit %d" % (list.size() + 1), "eq": eq})
+				outfits[me] = list
+				_db("insert into plox_outfits (uid, data) values ($1, $2) on conflict (uid) do update set data = excluded.data", [me, JSON.stringify(list)])
+				res = _outfits_res(me)
+				res.t = "s_outfit_save_res"
+				res.ok = true
+			reply.call(res)
+		"s_outfit_del":
+			var list: Array = outfits.get(me, [])
+			var i = msg.get("i", -1)
+			if (i is int or i is float) and int(i) >= 0 and int(i) < list.size():
+				list.remove_at(int(i))
+				outfits[me] = list
+				_db("insert into plox_outfits (uid, data) values ($1, $2) on conflict (uid) do update set data = excluded.data", [me, JSON.stringify(list)])
+			var r2 := _outfits_res(me)
+			r2.t = "s_outfit_del_res"
+			r2.ok = true
+			reply.call(r2)
+		"s_pro":
+			pay.pro_tick(me, now)
+			reply.call(pay.pro_info(me))
+		"s_pro_cancel":
+			reply.call(pay.pro_cancel(me))
+		"s_pro_renew_test":
+			# Test mode only: acts like the provider reporting a renewal.
+			var ok := cfg.s("pay_mode") == "sandbox" and pay.can_buy(me, "f_pro") == "" and pay.pro_renewed(me, "sandbox_renew_%s_%d" % [me, now], now)
+			reply.call({"t": "s_pro_renew_res", "ok": ok, "me": pay.pro_status(me)})
 		"s_pay_start":
 			reply.call(pay.start(me, msg, now))
 		"s_pay_confirm":
@@ -666,6 +734,9 @@ func _buy(me: String, id: String, now: int) -> Dictionary:
 		return res
 	var it: Dictionary = items[id]
 	var w := wallet(me)
+	if bool(it.get("pro", false)) and not pay.is_pro(me):
+		res.why = "This item is for Plux Pro members."
+		return res
 	for oid in owned.get(me, {}):
 		if owned[me][oid].item == id:
 			res.why = "You already own this."
@@ -841,8 +912,9 @@ func _ai_build(me: String, msg: Dictionary, reply: Callable, now: int) -> void:
 		fail.call("Your last game is still being built.")
 		return
 	var used := _ai_used_today(me)
-	if used >= cfg.i("ai_per_day"):
-		fail.call("You've used all %d AI builds for today. More tomorrow!" % cfg.i("ai_per_day"))
+	var ai_cap := ai_cap_for(me)
+	if used >= ai_cap:
+		fail.call("You've used all %d AI builds for today. More tomorrow!" % ai_cap)
 		return
 	if int(daily.get(today(now), {}).get("ai", 0)) >= AI_GLOBAL_PER_DAY:
 		fail.call("The AI builder is very busy today. Try again tomorrow.")
@@ -851,14 +923,18 @@ func _ai_build(me: String, msg: Dictionary, reply: Callable, now: int) -> void:
 	count("ai")
 	count("ai:" + me)
 	var started := Time.get_ticks_msec()
+	# 0.7.0: "make it harder", "add lava": change the game already on screen.
+	var change := {}
+	if msg.get("base") is Dictionary:
+		change = PloxLevel.clean(msg.base, cfg.i("studio_max_parts"))
 	_ai_call(prompt, func(ok: bool, level: Dictionary, why: String):
 		_ai_busy.erase(me)
 		var ms := Time.get_ticks_msec() - started
 		_ai_note(me, prompt, ok, ms, why)
 		if ok:
-			reply.call({"t": "s_ai_res", "ok": true, "level": level, "left": maxi(0, cfg.i("ai_per_day") - _ai_used_today(me))})
+			reply.call({"t": "s_ai_res", "ok": true, "level": level, "left": maxi(0, ai_cap_for(me) - _ai_used_today(me))})
 		else:
-			reply.call({"t": "s_ai_res", "ok": false, "why": "The AI couldn't build that one (%s). Try describing it differently." % why}))
+			reply.call({"t": "s_ai_res", "ok": false, "why": "The AI couldn't build that one (%s). Try describing it differently." % why}), false, {}, change)
 
 
 func _ai_used_today(uid: String) -> int:
@@ -873,7 +949,7 @@ func _ai_note(uid: String, prompt: String, ok: bool, ms: int, why: String) -> vo
 
 
 ## Calls {base}/chat/completions. done(ok, level, why). A test call uses a tiny prompt.
-func _ai_call(prompt: String, done: Callable, test := false, override := {}) -> void:
+func _ai_call(prompt: String, done: Callable, test := false, override := {}, change := {}) -> void:
 	var base := str(override.get("base", ai_cfg.base)).strip_edges().trim_suffix("/")
 	var model := str(override.get("model", ai_cfg.model)).strip_edges()
 	var key := str(override.get("key", "")) if str(override.get("key", "")) != "" else _ai_key()
@@ -892,6 +968,9 @@ func _ai_call(prompt: String, done: Callable, test := false, override := {}) -> 
 	else:
 		messages = [{"role": "system", "content": PloxLevel.ai_system_prompt(mini(cfg.i("studio_max_parts"), 90))},
 			{"role": "user", "content": "Build this game: " + prompt}]
+		if not change.is_empty() and change.get("parts", []).size() > 0:
+			messages[1].content = "Here is my current game as JSON:\n" + JSON.stringify(change) \
+				+ "\n\nChange it like this: " + prompt + "\nKeep everything I didn't ask to change. Reply with the whole updated game in the same JSON format."
 	var body := {"model": model, "messages": messages, "max_tokens": 40 if test else cfg.i("ai_max_tokens"), "temperature": 0.7}
 	var headers := PackedStringArray(["Content-Type: application/json", "Authorization: Bearer " + key,
 		"HTTP-Referer: https://github.com/eduzd/blockparty", "X-Title: Plox"])
@@ -1269,6 +1348,26 @@ func admin_handle(cid: int, msg: Dictionary, send: Callable) -> String:
 				var ms := Time.get_ticks_msec() - started
 				_ai_note("admin", "(test)" if not full else "(test build)", ok, ms, why)
 				reply.call({"t": "a_ai_test_res", "ok": ok, "why": why, "ms": ms, "parts": level.get("parts", []).size(), "title": level.get("title", "")}), not full)
+		"a_pro_set":
+			var uid := str(msg.get("uid", ""))
+			var days = msg.get("days", 0)
+			if not hub.users.has(uid) or not (days is int or days is float):
+				reply.call({"t": "a_err", "why": "No such player."})
+				return ""
+			if int(days) <= 0:
+				pay.remove_pro(uid)
+				_audit("pro_remove", str(hub.users[uid].get("username", uid)))
+			else:
+				var tier := str(msg.get("tier", ""))
+				var all := pay.tiers()
+				if all.is_empty():
+					reply.call({"t": "a_err", "why": "Add a Pro tier first."})
+					return ""
+				if not all.any(func(t): return t.id == tier):
+					tier = all[0].id
+				pay.grant_pro(uid, tier, clampi(int(days), 1, 3650), "admin", now)
+				_audit("pro_grant", "%s: %s for %d days" % [str(hub.users[uid].get("username", uid)), tier, int(days)])
+			reply.call({"t": "a_ok", "pro": pay.pro_status(uid)})
 		"a_orders":
 			var r := pay.admin_list()
 			r["t"] = "a_orders_res"

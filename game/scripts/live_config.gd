@@ -21,6 +21,7 @@ const DEFAULTS := {
 	# Game settings
 	"pop_round_s": 120, "pop_max_bots": 7, "room_size": 8,
 	# Economy
+	"outfits_free": 3,
 	"coins_daily": 50, "coins_round": 5, "coins_win": 25, "coins_publish": 20,
 	"coins_play_mine": 2, "round_rewards_per_day": 40, "start_coins": 100,
 	# 0.7.0: every game pays. Neon Bounce pays per stay of neon_reward_s seconds (up to 5
@@ -29,6 +30,9 @@ const DEFAULTS := {
 	# 0.7.0: buying Plux. Off until a payment provider is set up. In "sandbox" mode only the
 	# usernames in pay_testers can buy, nothing is charged, and orders are marked as tests.
 	"download_url": "",   # shared in invite messages: where people get the app
+	# 0.7.0: Plux Pro membership. Off until payments are set up; test mode as for packs.
+	"f_pro": false, "trade_pro_only": false,
+	"pro_tiers": "[{\"id\":\"pro450\",\"name\":\"Pro 450\",\"price\":4.99,\"cur\":\"USD\",\"plux_month\":450,\"buy_bonus\":10,\"ai_extra\":10,\"outfits\":10},{\"id\":\"pro1000\",\"name\":\"Pro 1000\",\"price\":9.99,\"cur\":\"USD\",\"plux_month\":1000,\"buy_bonus\":10,\"ai_extra\":25,\"outfits\":20},{\"id\":\"pro2200\",\"name\":\"Pro 2200\",\"price\":19.99,\"cur\":\"USD\",\"plux_month\":2200,\"buy_bonus\":10,\"ai_extra\":50,\"outfits\":30}]",
 	"f_buy_plux": false, "pay_mode": "sandbox", "pay_provider": "none", "pay_testers": "",
 	"plux_packs": "[{\"id\":\"p80\",\"plux\":80,\"price\":0.99,\"cur\":\"USD\"},{\"id\":\"p400\",\"plux\":400,\"bonus\":40,\"price\":4.99,\"cur\":\"USD\"},{\"id\":\"p800\",\"plux\":800,\"bonus\":100,\"price\":9.99,\"cur\":\"USD\",\"tag\":\"Popular\"},{\"id\":\"p1700\",\"plux\":1700,\"bonus\":300,\"price\":19.99,\"cur\":\"USD\",\"tag\":\"Best value\"}]",
 	# Studio and AI (the key itself is never here: see AdminHub)
@@ -44,7 +48,7 @@ const DEFAULTS := {
 ## Limits for numbers [min, max].
 const RANGES := {
 	"min_version": [0, 100000], "pop_round_s": [30, 600], "pop_max_bots": [0, 7], "room_size": [2, 16],
-	"coins_daily": [0, 100000], "coins_round": [0, 10000], "coins_win": [0, 100000], "coins_publish": [0, 100000],
+	"outfits_free": [0, 50], "coins_daily": [0, 100000], "coins_round": [0, 10000], "coins_win": [0, 100000], "coins_publish": [0, 100000],
 	"coins_play_mine": [0, 1000], "round_rewards_per_day": [0, 1000], "start_coins": [0, 100000],
 	"coins_neon": [0, 10000], "neon_reward_s": [15, 3600], "coins_studio_goal": [0, 10000], "coins_studio_first": [0, 10000],
 	"ai_per_day": [0, 100], "ai_max_tokens": [300, 6000], "ai_timeout_s": [10, 120],
@@ -91,6 +95,9 @@ static func clean(k: String, v) -> Array:
 			return [v in ["sandbox", "live"], v]
 		if k == "pay_provider":
 			return [v in ["none", "play", "razorpay", "stripe"], v]
+		if k == "pro_tiers":
+			var tiers := clean_tiers(v)
+			return [not tiers.is_empty() or v == "[]", JSON.stringify(tiers)]
 		if k == "plux_packs":
 			var packs := clean_packs(v)
 			return [not packs.is_empty() or v == "[]", JSON.stringify(packs)]
@@ -114,6 +121,31 @@ func public() -> Dictionary:
 	var out := values.duplicate()
 	out.erase("banned_words")
 	out.erase("pay_testers")
+	return out
+
+
+## Pro tiers: [{id, name, price, cur, plux_month, buy_bonus (%), ai_extra, outfits}].
+static func clean_tiers(v) -> Array:
+	var data = JSON.parse_string(v) if v is String else v
+	var out := []
+	var seen := {}
+	if not (data is Array):
+		return out
+	for t in data:
+		if not (t is Dictionary) or out.size() >= 4:
+			continue
+		var id := SocialHub.clean_username(str(t.get("id", "")))
+		var price = t.get("price", 0)
+		if id == "" or seen.has(id) or not (price is int or price is float) or float(price) <= 0.0 or float(price) > 1000.0:
+			continue
+		seen[id] = true
+		var num := func(k: String, hi: int) -> int:
+			var x = t.get(k, 0)
+			return clampi(int(x) if (x is int or x is float) else 0, 0, hi)
+		var cur := str(t.get("cur", "USD")).to_upper().substr(0, 3)
+		out.append({"id": id, "name": str(t.get("name", "Plux Pro")).strip_edges().substr(0, 24), "price": snappedf(float(price), 0.01),
+			"cur": cur if cur.length() == 3 else "USD", "plux_month": num.call("plux_month", 1000000), "buy_bonus": num.call("buy_bonus", 100),
+			"ai_extra": num.call("ai_extra", 100), "outfits": num.call("outfits", 50)})
 	return out
 
 

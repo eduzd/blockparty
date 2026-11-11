@@ -130,6 +130,8 @@ func _check(from: String, to: String, give: Array, get: Array, cg: int, cw: int)
 		return "Trading is switched off right now."
 	if from == to:
 		return "You can't trade with yourself."
+	if plox.cfg.b("trade_pro_only") and not (plox.pay.is_pro(from) and plox.pay.is_pro(to)):
+		return "Trading is for Plux Pro members (both players)."
 	if not plox.hub.users.has(to) or not plox.hub.users.has(from):
 		return "That player doesn't exist."
 	if not plox.hub.friends.get(from, {}).has(to):

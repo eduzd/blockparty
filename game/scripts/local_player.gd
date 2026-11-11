@@ -13,6 +13,11 @@ var gravity_sign := 1.0
 var avatar: Avatar
 var bounces := 0
 var _knock := Vector3.ZERO
+var trampoline := true             # Neon world floor; Studio games switch it off
+var respawn_at := Protocol.SPAWN
+var min_y := Protocol.MIN_Y
+var speed_mult := 1.0
+var jump_velocity := Protocol.JUMP_VELOCITY
 var _shape: CollisionShape3D
 
 
@@ -53,26 +58,26 @@ func _physics_process(delta: float) -> void:
 	var dir := right * input.x + forward * input.y
 	var on_floor := is_on_floor()
 	var drift := Vector3.ZERO if on_floor else Vector3(wind.x, 0, wind.y)
-	velocity.x = dir.x * Protocol.MOVE_SPEED + drift.x + _knock.x
-	velocity.z = dir.z * Protocol.MOVE_SPEED + drift.z + _knock.z
+	velocity.x = dir.x * Protocol.MOVE_SPEED * speed_mult + drift.x + _knock.x
+	velocity.z = dir.z * Protocol.MOVE_SPEED * speed_mult + drift.z + _knock.z
 	_knock = _knock.move_toward(Vector3.ZERO, 14.0 * delta)
 	if on_floor:
 		if jump_pressed:
-			velocity.y = Protocol.JUMP_VELOCITY * gravity_sign
+			velocity.y = jump_velocity * gravity_sign
 	else:
 		velocity.y -= Protocol.GRAVITY * gravity_sign * delta
 	jump_pressed = false
 	move_and_slide()
 	# Trampoline floor: the ground (not the pad or blocks) launches you upward.
-	if gravity_sign > 0.0 and is_on_floor() and global_position.y < 0.1:
+	if trampoline and gravity_sign > 0.0 and is_on_floor() and global_position.y < 0.1:
 		velocity.y = Protocol.TRAMPOLINE_VELOCITY
 		bounces += 1
 	if dir.length() > 0.05:
 		var target_yaw := atan2(-dir.x, -dir.z)
 		avatar.rotation.y = lerp_angle(avatar.rotation.y, target_yaw, minf(delta * 12.0, 1.0))
 	avatar.animate(delta, Vector2(dir.x, dir.z).length() * Protocol.MOVE_SPEED if is_on_floor() else 0.0)
-	if global_position.y < Protocol.MIN_Y:
-		teleport(Protocol.SPAWN)
+	if global_position.y < min_y:
+		teleport(respawn_at)
 
 
 func teleport(pos: Vector3) -> void:

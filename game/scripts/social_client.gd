@@ -22,6 +22,9 @@ signal cfg_changed                              # live settings from the server 
 signal eco_changed                              # Plux, inventory, equipped items or shop changed
 signal plux_earned(amount: int, why: String)
 signal reply(t: String, msg: Dictionary)         # Studio, games, AI and shop answers
+signal pre_reply(msg: Dictionary)                 # answers on the sign-up / log-in socket (0.7.0)
+signal invite_in(msg: Dictionary)                 # a friend invited you to a game
+signal trades_changed                             # a trade offer arrived or changed
 signal banned(text: String)
 
 ## App version code (export_presets version/code). The server can ask older apps to update.
@@ -60,6 +63,14 @@ var _hello_sent := false
 var _login_ws: WebSocketPeer
 var _login_msg := {}
 var _login_at := 0
+## 0.7.0: while the welcome screen is up, the phone's own account isn't connected.
+var hold := false
+var _pre_ws: WebSocketPeer
+var _pre_queue: Array = []
+var _pre_wait: Array = []      # types still waiting for an answer
+var _pre_at := 0
+var trades: Array = []         # latest trade list from the server
+var invites: Array = []        # invites waiting on screen
 
 
 func _ready() -> void:
@@ -150,6 +161,9 @@ func _set_state(s: String) -> void:
 
 
 func _open() -> void:
+	if hold:
+		_set_state("offline")
+		return
 	if url == "" or url.contains("YOUR-SERVICE"):
 		_set_state("offline")
 		return
@@ -202,6 +216,8 @@ func _process(_delta: float) -> void:
 		_save_now()
 	if _login_ws != null:
 		_poll_login(now)
+	if _pre_ws != null:
+		_poll_pre(now)
 	if _ws == null:
 		if _retry_at != 0 and now >= _retry_at and state != "elsewhere" and url != "":
 			_retry_at = 0
@@ -313,6 +329,77 @@ func _poll_login(now: int) -> void:
 			login_done.emit(false, "slow" if msg.get("code") == "rate_limit" else "offline")
 
 
+# ------------------------------------------------------------------ welcome (0.7.0)
+
+## True on a phone that has never had an account: show Sign up / Log in first.
+func needs_welcome() -> bool:
+	return not is_logged_in() and (data.me as Dictionary).is_empty() and not bool(data.get("used", false))
+
+
+## Sends a message on the sign-up socket (s_name_check, s_signup, s_login).
+## Every answer comes back as pre_reply.
+func pre_send(msg: Dictionary) -> void:
+	if url == "" or url.contains("YOUR-SERVICE"):
+		pre_reply.emit({"t": str(msg.t) + "_res", "ok": false, "why": "offline"})
+		return
+	_pre_queue.append(msg)
+	_pre_wait.append(str(msg.t))
+	_pre_at = Time.get_ticks_msec()
+	if _pre_ws == null:
+		_pre_ws = WebSocketPeer.new()
+		if _pre_ws.connect_to_url(url) != OK:
+			_pre_ws = null
+			_pre_fail("offline")
+
+
+func _pre_fail(why: String) -> void:
+	for t in _pre_wait:
+		pre_reply.emit({"t": t + "_res", "ok": false, "why": why})
+	_pre_wait.clear()
+	_pre_queue.clear()
+
+
+func _poll_pre(now: int) -> void:
+	_pre_ws.poll()
+	var rs := _pre_ws.get_ready_state()
+	if rs == WebSocketPeer.STATE_CLOSED or (not _pre_wait.is_empty() and now - _pre_at > 75000):
+		_pre_ws.close()
+		_pre_ws = null
+		_pre_fail("offline")
+		return
+	if rs != WebSocketPeer.STATE_OPEN:
+		return
+	for m in _pre_queue:
+		_pre_ws.send_text(JSON.stringify(m))
+	_pre_queue.clear()
+	while _pre_ws != null and _pre_ws.get_available_packet_count() > 0:
+		var msg = JSON.parse_string(_pre_ws.get_packet().get_string_from_utf8())
+		if not (msg is Dictionary) or not (msg.get("t") is String):
+			continue
+		if msg.t == "error":
+			var why := "slow" if msg.get("code") == "rate_limit" else "offline"
+			_pre_ws.close()
+			_pre_ws = null
+			_pre_fail(why)
+			return
+		var t0 := str(msg.t).trim_suffix("_res")
+		if t0 == "s_name":
+			t0 = "s_name_check"
+		_pre_wait.erase(t0)
+		if (msg.t == "s_login_res" or msg.t == "s_signup_res") and bool(msg.get("ok", false)) \
+				and SocialHub.valid_uid(msg.get("uid")) and msg.get("token") is String:
+			_pre_ws.close()
+			_pre_ws = null
+			_pre_queue.clear()
+			_pre_wait.clear()
+			hold = false
+			_switch_to(str(msg.uid), str(msg.token), msg.get("me", {}))
+		pre_reply.emit(msg)
+	if _pre_ws != null and _pre_wait.is_empty() and now - _pre_at > 60000:
+		_pre_ws.close()
+		_pre_ws = null
+
+
 func _switch_to(new_uid: String, token: String, me: Dictionary) -> void:
 	if not is_logged_in():
 		# Keep this phone's own account to come back to on log out.
@@ -361,6 +448,16 @@ func _back_to_device() -> void:
 	_load_defaults()
 	uid = SocialHub.uid_for_key(data.key)
 	_save_now()
+	if needs_welcome():
+		# Nothing to go back to on this phone: show the welcome screen again.
+		hold = true
+		if _ws != null:
+			_ws.close()
+			_ws = null
+		_set_state("offline")
+		account_switched.emit()
+		_touch()
+		return
 	account_switched.emit()
 	_touch()
 	_force_reconnect()
@@ -482,6 +579,59 @@ func _on_msg(msg: Dictionary) -> void:
 			reply.emit(str(msg.t), msg)
 		"s_ticket_res":
 			pop_ticket = str(msg.get("ticket", ""))
+		"s_trades_res":
+			if msg.get("trades") is Array:
+				trades = msg.trades
+			trades_changed.emit()
+			reply.emit(str(msg.t), msg)
+		"s_trade_new", "s_trade_upd":
+			if msg.get("eco") is Dictionary:
+				eco = msg.eco
+				eco_changed.emit()
+			var tr: Dictionary = msg.get("trade", {})
+			var found := false
+			for i in trades.size():
+				if str(trades[i].get("id", "")) == str(tr.get("id", "")):
+					trades[i] = tr
+					found = true
+			if not found and not tr.is_empty():
+				trades.push_front(tr)
+			trades_changed.emit()
+			reply.emit(str(msg.t), msg)
+		"s_trade_res":
+			if msg.get("eco") is Dictionary:
+				eco = msg.eco
+				eco_changed.emit()
+			if msg.get("trade") is Dictionary:
+				var tr2: Dictionary = msg.trade
+				var found2 := false
+				for i in trades.size():
+					if str(trades[i].get("id", "")) == str(tr2.get("id", "")):
+						trades[i] = tr2
+						found2 = true
+				if not found2:
+					trades.push_front(tr2)
+				trades_changed.emit()
+			reply.emit(str(msg.t), msg)
+		"s_invite_in":
+			if feature("invites"):
+				invites.append(msg)
+				invite_in.emit(msg)
+		"s_pay_res", "s_pay_start_res":
+			if msg.get("eco") is Dictionary:
+				eco = msg.eco
+				eco_changed.emit()
+			reply.emit(str(msg.t), msg)
+		"s_finish_res":
+			if bool(msg.get("ok", false)) and msg.get("me") is Dictionary:
+				for k in msg.me:
+					data.me[k] = msg.me[k]
+				data.username = str(msg.me.get("username", data.username))
+				_touch()
+			reply.emit(str(msg.t), msg)
+		"s_inv_res", "s_packs_res", "s_orders_res", "s_invite_res", "s_invite_code_res", "s_invite_ans", \
+				"s_name_res", "s_game_done_res":
+			reply.emit(str(msg.t), msg)
 		"s_studio_mine_res", "s_game_res", "s_studio_save_res", "s_studio_delete_res", "s_games_res", \
 				"s_game_like_res", "s_ai_res", "s_report_res":
 			if msg.t == "s_studio_save_res" and msg.has("coins"):
@@ -569,6 +719,7 @@ func _on_msg(msg: Dictionary) -> void:
 		"s_profile_res":
 			if msg.get("me") is Dictionary:
 				data.me = msg.me
+				data.used = true
 				data.username = str(msg.me.get("username", data.username))
 			_touch()
 			profile_saved.emit(bool(msg.get("ok", false)), str(msg.get("why", "")))
@@ -720,8 +871,8 @@ func equipped_cards() -> Array:
 	return out
 
 
-func set_playing(what: String) -> void:
-	_send({"t": "s_playing", "what": what})
+func set_playing(what: String, room := "") -> void:
+	_send({"t": "s_playing", "what": what, "room": room})
 
 
 func search(q: String) -> void:

@@ -59,6 +59,7 @@ var mode := ""     # "online", "host", "friend"
 var server_offset_ms := 0.0
 var clock_synced := false
 var server_gravity := 1.0
+var current_room := ""   # the online room code, for invites and "Join" (0.7.0)
 var game := "neon"   # which game the next join asks for: "neon" or "pop" (Pop-Up Panic)
 var pop: PopGame
 
@@ -303,6 +304,34 @@ func _on_play_online() -> void:
 	_connect(url)
 
 
+## 0.7.0: Join from an invite or from a friend's "Playing" row.
+func join_friend_room(what: String, room: String) -> void:
+	room = Protocol.sanitize_room(room)
+	if room == "" or not (what in ["pop", "neon"]):
+		return
+	if net and net.is_in_room():
+		_leave_game()
+	settings.set_value("p", "room", room)
+	if what == "pop":
+		_on_pop_online()
+	else:
+		_on_play_online()
+
+
+## In a game: pick friends to invite to this room.
+func _open_invite_picker() -> void:
+	if not social or current_room == "":
+		return
+	var layer := CanvasLayer.new()
+	layer.layer = 50
+	add_child(layer)
+	var picker := InvitePicker.new()
+	picker.setup(social, game, current_room, "")
+	picker.closed.connect(func(): layer.queue_free())
+	picker.toast.connect(func(t): _toast(t))
+	layer.add_child(picker)
+
+
 ## Pop-Up Panic online: same room code as everyone else, its own rooms on the server.
 func _on_pop_online() -> void:
 	var url := server_url()
@@ -370,11 +399,13 @@ func _connect(url: String) -> void:
 			bots = maxi(bots, 1)
 		extra = {"g": "pop", "ch": int(settings.get_value("p", "pop_ch", 0)), "bots": bots}
 		# 0.6.0: a one-use ticket tells the server which account to pay Plux to.
-		if social and social.pop_ticket != "" and mode == "online":
-			extra["tk"] = social.pop_ticket
-			social.pop_ticket = ""
+	# 0.6.0/0.7.0: a one-use ticket tells the server which account to pay Plux to.
+	if social and social.pop_ticket != "" and mode == "online":
+		extra["tk"] = social.pop_ticket
+		social.pop_ticket = ""
+	current_room = room if mode == "online" else ""
 	if social:
-		social.set_playing(game if game in ["pop", "neon"] else "neon")
+		social.set_playing(game if game in ["pop", "neon"] else "neon", current_room)
 	net.join(url, _player_name(), room, extra)
 
 
@@ -454,7 +485,10 @@ func _enter_game() -> void:
 	rotate_btn = _hud_button("device-phone-mobile", func():
 		_set_orientation("portrait" if orientation == "landscape" else "landscape"))
 	var leave := _hud_button("x-mark", _leave_game)
-	for b in [mic_btn, voice_btn, rotate_btn, leave]:
+	var row: Array = [mic_btn, voice_btn, rotate_btn, leave]
+	if mode == "online" and social and social.feature("invites"):
+		row.insert(0, _hud_button("user-plus", func(): _open_invite_picker()))
+	for b in row:
 		hud_buttons.add_child(b)
 	hud_drop = Label.new()
 	hud_drop.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
