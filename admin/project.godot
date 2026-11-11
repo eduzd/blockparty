@@ -4,7 +4,7 @@ config_version=5
 [application]
 
 config/name="Plux Admin"
-config/version="1.0.0"
+config/version="1.0.1"
 config/description="Plux control room"
 run/main_scene="res://admin.tscn"
 boot_splash/bg_color=Color(0.07, 0.075, 0.08, 1)
@@ -18,7 +18,7 @@ window/size/viewport_width=360
 window/size/viewport_height=360
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
-window/handheld/orientation=1
+window/handheld/orientation=6
 
 [input_devices]
 
