@@ -101,6 +101,9 @@ func _load() -> void:
 	data.av = SocialHub.clean_av(data.get("av", -1))
 	if not (data.get("me") is Dictionary):
 		data.me = {}
+	# 0.7.0: a brand-new phone waits on the welcome screen (Sign up / Log in) instead of
+	# making an account by itself.
+	hold = needs_welcome()
 	_save_now()
 
 
@@ -333,6 +336,9 @@ func _poll_login(now: int) -> void:
 
 ## True on a phone that has never had an account: show Sign up / Log in first.
 func needs_welcome() -> bool:
+	# A phone that already had an account before 0.7.0 (a name, friends or chats) keeps it.
+	if not (data.friends as Dictionary).is_empty() or not (data.chats as Dictionary).is_empty():
+		return false
 	return not is_logged_in() and (data.me as Dictionary).is_empty() and not bool(data.get("used", false))
 
 

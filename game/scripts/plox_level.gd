@@ -190,3 +190,217 @@ static func ai_system_prompt(max_parts: int) -> String:
 		+ "Positions are the CENTRE of each part. The player jumps about 2.2 m high and 5 m far, so gaps between platforms must be under 4.5 m and steps up under 2 m (or use a bounce pad). "
 		+ "Spawn must be 1 m above the top of the first platform; goal 1 m above the top of the last platform. "
 		+ "Use at most %d parts. Make it fun, fair and beatable in 1 to 3 minutes, with a clear path from spawn to goal." % max_parts)
+
+
+# ------------------------------------------------------------------ quick builder
+## Builds or changes a level from plain words, with no AI. The server uses it when no AI
+## service is set up (or the AI fails), so Studio always works. Always returns a level that
+## passes check(): a path of platforms from the start to the flag.
+static func _has(words: String, keys: Array) -> bool:
+	for k in keys:
+		if words.contains(k):
+			return true
+	return false
+
+
+static func quick_build(prompt: String, base = null, seed_val := -1) -> Dictionary:
+	var w := " " + prompt.to_lower() + " "
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_val if seed_val >= 0 else hash(prompt + str(Time.get_ticks_usec()))
+	var lvl: Dictionary
+	if base is Dictionary and not (base as Dictionary).is_empty() and (base as Dictionary).has("parts"):
+		lvl = clean(base, MAX_PARTS_HARD)
+		_quick_change(lvl, w, rng)
+	else:
+		lvl = _quick_new(w, rng)
+	# Sky words work both ways.
+	if _has(w, ["night", "dark", "space", "neon", "galaxy"]): lvl.sky = 2
+	elif _has(w, ["sunset", "evening", "desert", "volcano"]): lvl.sky = 1
+	elif _has(w, ["candy", "sweet", "pink", "cute", "dessert"]): lvl.sky = 3
+	elif _has(w, ["storm", "rain", "spooky", "scary", "haunted"]): lvl.sky = 4
+	elif _has(w, [" day", "sunny", "morning"]): lvl.sky = 0
+	lvl = clean(lvl, MAX_PARTS_HARD)
+	if check(lvl) != "":
+		lvl = _quick_new(w, rng)   # a change broke the path: start fresh instead
+	return lvl
+
+
+static func _quick_title(w: String) -> String:
+	var themes := {"lava": "Lava Run", "volcano": "Volcano Climb", "ice": "Frozen Dash", "snow": "Snowy Peaks",
+		"space": "Space Hop", "candy": "Candy Climb", "jump": "Bounce Park", "bounce": "Bounce Park",
+		"spin": "Hammer Time", "hammer": "Hammer Time", "star": "Star Hunt", "coin": "Star Hunt",
+		"tower": "Sky Tower", "sky": "Sky Tower", "spooky": "Spooky Path", "race": "Speed Race", "obby": "Mega Obby"}
+	for k in themes:
+		if w.contains(k):
+			return themes[k]
+	var p := w.strip_edges()
+	return p.substr(0, MAX_TITLE).capitalize() if p.length() > 2 and p.length() <= 24 else "My Obby"
+
+
+static func _quick_new(w: String, rng: RandomNumberGenerator) -> Dictionary:
+	var hard := _has(w, ["hard", "difficult", "insane", "extreme", "pro "])
+	var easy := _has(w, ["easy", "kid", "simple", "beginner"])
+	var long := _has(w, ["long", "big", "huge", "mega", "tower"])
+	var n := 14 if long else 10
+	if _has(w, ["short", "quick", "tiny"]): n = 7
+	var tower := _has(w, ["tower", "climb", "up", "sky"])
+	var lava := _has(w, ["lava", "volcano", "fire", "hot"])
+	var ice := _has(w, ["ice", "snow", "frozen", "slip", "winter"])
+	var bounce := _has(w, ["jump", "bounce", "trampoline", "pad", "spring"])
+	var spin := _has(w, ["spin", "hammer", "swing", "knock"])
+	var mover := _has(w, ["move", "moving", "slide", "elevator"])
+	var stars := _has(w, ["star", "coin", "collect", "treasure"]) or not hard
+	var lvl := {"v": VERSION, "title": _quick_title(w), "sky": 0, "spawn": [0.0, 1.0, 0.0], "goal": [0.0, 1.0, 0.0], "parts": []}
+	var parts: Array = lvl.parts
+	var palette := [0, 1, 6, 7, 9, 8]
+	parts.append(["block", 0.0, -0.5, 0.0, 8.0, 1.0, 8.0, 0.0, 6])
+	var pos := Vector3(0, 0, 0)   # top centre of the last platform
+	var last := 8.0
+	var dir := 0.0
+	for i in n:
+		var size := rng.randf_range(2.6, 3.6) if hard else (rng.randf_range(4.5, 6.0) if easy else rng.randf_range(3.4, 4.6))
+		var gap := rng.randf_range(2.6, 3.6) if hard else (rng.randf_range(1.2, 2.0) if easy else rng.randf_range(1.8, 2.8))
+		dir = clampf(dir + rng.randf_range(-0.6, 0.6), -0.9, 0.9)
+		var step := last / 2.0 + gap + size / 2.0
+		var rise := rng.randf_range(0.6, 1.4) if tower else rng.randf_range(-0.4, 0.8)
+		var kind := "block"
+		var r := rng.randf()
+		if bounce and i % 4 == 2:
+			# A jump pad then a tall step only the pad can reach.
+			parts.append(["bounce", pos.x, pos.y + 0.2, pos.z, 1.8, 0.4, 1.8, 0.0, 8])
+			rise = rng.randf_range(3.0, 4.5)
+		elif mover and i % 4 == 1:
+			kind = "mover"
+		elif ice and r < 0.45:
+			kind = "ice"
+		var nxt := pos + Vector3(sin(dir) * step, rise, -cos(dir) * step)
+		nxt.y = clampf(nxt.y, 0.0, 48.0)
+		nxt.x = clampf(nxt.x, -56.0, 56.0)
+		if nxt.z < -56.0:
+			break
+		var col: int = 9 if kind == "ice" else palette[i % palette.size()]
+		if kind == "mover":
+			# Movers slide sideways across the path; make them wide enough to land on.
+			parts.append(["mover", nxt.x, nxt.y - 0.3, nxt.z, size + 1.0, 0.6, size + 1.0, rad_to_deg(dir) + 90.0, 7])
+			parts.append(["block", nxt.x, nxt.y - 0.5, nxt.z, 1.5, 1.0, 1.5, 0.0, 3])   # a safe post in the middle
+		else:
+			parts.append([kind, nxt.x, nxt.y - 0.5, nxt.z, size, 1.0, size, rad_to_deg(dir), col])
+		if lava and i % 2 == 1:
+			var mid := (pos + nxt) / 2.0
+			parts.append(["lava", mid.x, minf(pos.y, nxt.y) - 3.0, mid.z, gap + 3.0, 0.5, size + 2.0, rad_to_deg(dir), 4])
+			if size > 3.4 and rng.randf() < 0.5:
+				parts.append(["lava", nxt.x, nxt.y + 0.05, nxt.z, size * 0.35, 0.2, size * 0.35, 0.0, 4])
+		if spin and i % 3 == 1 and kind == "block":
+			parts.append(["spinner", nxt.x, nxt.y + 0.5, nxt.z, size + 2.0, 0.6, 0.6, 0.0, 3])
+		if stars and rng.randf() < 0.45:
+			parts.append(["coin", nxt.x + rng.randf_range(-1, 1), nxt.y + 1.4, nxt.z, 1.0, 1.0, 1.0, 0.0, 5])
+		if i > 0 and i % 5 == 4:
+			parts.append(["checkpoint", nxt.x, nxt.y + 0.15, nxt.z, 1.8, 0.3, 1.8, 0.0, 6])
+		pos = nxt
+		last = size
+	# Finish platform
+	var step2 := last / 2.0 + 2.0 + 3.0
+	var fin := pos + Vector3(sin(dir) * step2, 0.5, -cos(dir) * step2)
+	fin.z = maxf(fin.z, -57.0)
+	parts.append(["block", fin.x, fin.y - 0.5, fin.z, 6.0, 1.0, 6.0, 0.0, 5])
+	lvl.goal = [fin.x, fin.y + 1.0, fin.z]
+	if lava:
+		lvl.sky = 1
+	elif ice:
+		lvl.sky = 0
+	return lvl
+
+
+static func _quick_change(lvl: Dictionary, w: String, rng: RandomNumberGenerator) -> void:
+	var parts: Array = lvl.parts
+	var plats := []
+	for p in parts:
+		if p[0] in ["block", "ice", "mover"]:
+			plats.append(p)
+	var sp: Array = lvl.spawn
+	var g: Array = lvl.goal
+	var is_end := func(p) -> bool:
+		return (absf(p[1] - sp[0]) < p[4] / 2.0 + 0.5 and absf(p[3] - sp[2]) < p[6] / 2.0 + 0.5) \
+			or (absf(p[1] - g[0]) < p[4] / 2.0 + 0.5 and absf(p[3] - g[2]) < p[6] / 2.0 + 0.5)
+	if _has(w, ["harder", "hard", "difficult", "tricky", "challenge"]):
+		for p in plats:
+			if not is_end.call(p):
+				p[4] = maxf(1.8, p[4] * 0.72)
+				p[6] = maxf(1.8, p[6] * 0.72)
+		var k := 0
+		for p in plats:
+			if not is_end.call(p) and p[0] == "block" and k < 3 and rng.randf() < 0.5:
+				parts.append(["spinner", p[1], p[2] + 1.0, p[3], p[4] + 2.0, 0.6, 0.6, 0.0, 3])
+				k += 1
+	if _has(w, ["easier", "easy", "simpler"]):
+		for p in plats:
+			p[4] = minf(MAX_SIZE, p[4] * 1.35)
+			p[6] = minf(MAX_SIZE, p[6] * 1.35)
+		for i in range(parts.size() - 1, -1, -1):
+			if parts[i][0] in ["lava", "spinner"]:
+				parts.remove_at(i)
+	if _has(w, ["lava", "fire", "volcano"]) and not _has(w, ["no lava", "remove lava"]):
+		var low := 999.0
+		var xs := Vector2(999, -999)
+		var zs := Vector2(999, -999)
+		for p in plats:
+			low = minf(low, p[2] - p[5] / 2.0)
+			xs = Vector2(minf(xs.x, p[1]), maxf(xs.y, p[1]))
+			zs = Vector2(minf(zs.x, p[3]), maxf(zs.y, p[3]))
+		parts.append(["lava", (xs.x + xs.y) / 2.0, low - 2.0, (zs.x + zs.y) / 2.0,
+			minf(MAX_SIZE, xs.y - xs.x + 12.0), 0.5, minf(MAX_SIZE, zs.y - zs.x + 12.0), 0.0, 4])
+		for p in plats:
+			if not is_end.call(p) and p[4] >= 3.5 and rng.randf() < 0.35:
+				parts.append(["lava", p[1], p[2] + p[5] / 2.0 + 0.1, p[3], p[4] * 0.3, 0.2, p[6] * 0.3, 0.0, 4])
+	if _has(w, ["no lava", "remove lava", "without lava"]):
+		for i in range(parts.size() - 1, -1, -1):
+			if parts[i][0] == "lava":
+				parts.remove_at(i)
+	if _has(w, ["ice", "slippery", "frozen", "snow"]):
+		for p in plats:
+			if p[0] == "block" and not is_end.call(p) and rng.randf() < 0.6:
+				p[0] = "ice"
+				p[8] = 9
+	if _has(w, ["star", "coin", "collect"]):
+		for p in plats:
+			if rng.randf() < 0.6:
+				parts.append(["coin", p[1], p[2] + p[5] / 2.0 + 1.4, p[3], 1.0, 1.0, 1.0, 0.0, 5])
+	if _has(w, ["jump", "bounce", "trampoline", "pad"]):
+		var k2 := 0
+		for p in plats:
+			if not is_end.call(p) and k2 < 4 and rng.randf() < 0.5:
+				parts.append(["bounce", p[1], p[2] + p[5] / 2.0 + 0.2, p[3], 1.6, 0.4, 1.6, 0.0, 8])
+				k2 += 1
+	if _has(w, ["spin", "hammer", "spinner"]):
+		var k3 := 0
+		for p in plats:
+			if not is_end.call(p) and p[0] != "mover" and k3 < 4 and rng.randf() < 0.5:
+				parts.append(["spinner", p[1], p[2] + 1.0, p[3], p[4] + 2.0, 0.6, 0.6, 0.0, 3])
+				k3 += 1
+	if _has(w, ["moving", "move", "mover"]):
+		var k4 := 0
+		for p in plats:
+			if not is_end.call(p) and p[0] == "block" and k4 < 3 and rng.randf() < 0.5:
+				p[0] = "mover"
+				p[8] = 7
+				k4 += 1
+	if _has(w, ["checkpoint", "save point"]):
+		var i2 := 0
+		for p in plats:
+			i2 += 1
+			if i2 % 4 == 0 and not is_end.call(p):
+				parts.append(["checkpoint", p[1], p[2] + p[5] / 2.0 + 0.15, p[3], 1.8, 0.3, 1.8, 0.0, 6])
+	if _has(w, ["bigger", "wider"]):
+		for p in plats:
+			p[4] = minf(MAX_SIZE, p[4] * 1.3)
+			p[6] = minf(MAX_SIZE, p[6] * 1.3)
+	if _has(w, ["colour", "color", "colorful", "colourful", "rainbow"]):
+		var ci := 0
+		for p in plats:
+			p[8] = ci % 10
+			ci += 1
+	var rename := w.find("call it ")
+	if rename < 0:
+		rename = w.find("name it ")
+	if rename >= 0:
+		lvl.title = clean_title(w.substr(rename + 8).strip_edges().capitalize())

@@ -782,7 +782,7 @@ static func avatar_presence(size: float, name: String, online: bool, av: int = -
 
 ## Person row inside a card: avatar (with presence), name (titleMedium), sub line,
 ## optional trailing controls. The whole row taps unless cb is empty.
-static func person_row(name: String, sub: String, online: bool, cb: Callable, trailing: Array = [], sub_color: Color = Color(0, 0, 0, 0), av: int = -1, eq: Array = []) -> Control:
+static func person_row(name: String, sub: String, online: bool, cb: Callable, trailing: Array = [], sub_color: Color = Color(0, 0, 0, 0), av: int = -1, eq: Array = [], pro := false) -> Control:
 	var row := TapRow.new()
 	row.on_tap = cb
 	var h := hbox(14)
@@ -794,7 +794,18 @@ static func person_row(name: String, sub: String, online: bool, cb: Callable, tr
 	var t := label(name, "title_medium", c("on_surface"), false)
 	t.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	t.clip_text = true
-	col.add_child(t)
+	if pro:
+		# 0.7.0: the gold PRO badge next to the name in friend lists and search.
+		var nrow := hbox(6)
+		nrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		nrow.add_child(t)
+		var b := PluxPages.pro_badge(true)
+		b.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		nrow.add_child(b)
+		col.add_child(nrow)
+	else:
+		col.add_child(t)
 	if sub != "":
 		var s := label(sub, "body_medium", sub_color if sub_color.a > 0 else c("on_surface_variant"), false)
 		s.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS

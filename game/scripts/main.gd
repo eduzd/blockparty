@@ -55,7 +55,7 @@ var cam_pitch := -0.35
 var send_accum := 0.0
 var corrections := 0
 var flips_seen := 0
-var mode := ""     # "online", "host", "friend"
+var mode := ""     # "online", "solo" (practice with bots); "host" only in automated checks
 var server_offset_ms := 0.0
 var clock_synced := false
 var server_gravity := 1.0
@@ -89,7 +89,8 @@ func _ready() -> void:
 	social.ensure_profile(str(settings.get_value("p", "name", "")))
 	social.chat_message.connect(_on_chat_in_game)
 	social.notice.connect(_on_notice_in_game)
-	if autotest == "" or autotest.begins_with("social"):
+	social.invite_in.connect(_on_invite_in)
+	if autotest == "" or autotest.begins_with("social") or autotest == "welcome":
 		social.start(server_url())
 	net = NetClient.new()
 	add_child(net)
@@ -216,19 +217,12 @@ func _build_menu() -> void:
 	_fit_roots()
 
 
+## The game service address is built in and never shown to players. Automated checks can
+## point the app at a local copy with the PLUX_SERVER environment variable.
 func server_url() -> String:
-	return str(settings.get_value("p", "server", DEFAULT_SERVER_URL)).strip_edges()
-
-
-func set_server(t: String) -> void:
-	var url := t.strip_edges()
-	if url != "" and not url.begins_with("ws://") and not url.begins_with("wss://"):
-		url = "wss://" + url.trim_prefix("https://").trim_prefix("http://")
-	if url == server_url():
-		return
-	settings.set_value("p", "server", url)
-	settings.save(SETTINGS_PATH)
-	social.start(url)
+	if OS.has_environment("PLUX_SERVER"):
+		return OS.get_environment("PLUX_SERVER")
+	return DEFAULT_SERVER_URL
 
 
 ## Theme: "system" follows the phone, or "light" / "dark".
@@ -295,7 +289,7 @@ func _player_name() -> String:
 func _on_play_online() -> void:
 	var url := server_url()
 	if url == "" or url.contains("YOUR-SERVICE"):
-		_status("Add the server address first, in Profile > Settings.")
+		_status("Can't connect right now. Try again.")
 		return
 	if not url.begins_with("ws://") and not url.begins_with("wss://"):
 		url = "wss://" + url.trim_prefix("https://").trim_prefix("http://")
@@ -336,7 +330,7 @@ func _open_invite_picker() -> void:
 func _on_pop_online() -> void:
 	var url := server_url()
 	if url == "" or url.contains("YOUR-SERVICE"):
-		_status("Add the server address first, in Profile > Settings.")
+		_status("Can't connect right now. Try again.")
 		return
 	if not url.begins_with("ws://") and not url.begins_with("wss://"):
 		url = "wss://" + url.trim_prefix("https://").trim_prefix("http://")
@@ -360,30 +354,19 @@ func _on_pop_solo() -> void:
 	_connect("ws://127.0.0.1:%d" % (Protocol.DEFAULT_PORT + 1))
 
 
-func _on_host() -> void:
+## Only the automated checks use this (a game service on this computer). Players have no
+## local Wi-Fi play since 0.7.0: everything goes through Plux online.
+func _autotest_host() -> void:
 	host_server = RefereeServer.new()
 	add_child(host_server)
-	if host_server.start(Protocol.DEFAULT_PORT, "*") != OK:
+	if host_server.start(Protocol.DEFAULT_PORT, "127.0.0.1") != OK:
 		host_server.queue_free()
 		host_server = null
-		_status("Couldn't start hosting on port %d." % Protocol.DEFAULT_PORT)
+		_status("Can't start right now. Try again.")
 		return
 	mode = "host"
 	game = "neon"
 	_connect("ws://127.0.0.1:%d" % Protocol.DEFAULT_PORT)
-
-
-func _on_join_friend() -> void:
-	var ip := str(settings.get_value("p", "friend", "")).strip_edges()
-	if ip == "":
-		_status("Type your friend's IP address (shown on their screen).")
-		return
-	mode = "friend"
-	game = "neon"
-	var url := ip if ip.begins_with("ws") else "ws://%s" % ip
-	if not ip.begins_with("ws") and not ip.contains(":"):
-		url += ":%d" % Protocol.DEFAULT_PORT
-	_connect(url)
 
 
 func _connect(url: String) -> void:
@@ -407,14 +390,6 @@ func _connect(url: String) -> void:
 	if social:
 		social.set_playing(game if game in ["pop", "neon"] else "neon", current_room)
 	net.join(url, _player_name(), room, extra)
-
-
-func _local_ips() -> Array:
-	var out := []
-	for ip in IP.get_local_addresses():
-		if ip.begins_with("192.168.") or ip.begins_with("10.") or ip.begins_with("172."):
-			out.append(ip)
-	return out
 
 
 # ---------------------------------------------------------------------- game
@@ -911,10 +886,7 @@ func _update_hud_info() -> void:
 	var info := "Room %s  ·  %d players  ·  %s" % [net.room, remotes.size() + 1, ping]
 	if mode == "solo":
 		info = "Practice  ·  you + %d bots" % remotes.size()
-	var hosts := ""
-	if mode == "host":
-		var ips := _local_ips()
-		hosts = "Friends join: %s" % (", ".join(ips) if not ips.is_empty() else "turn on Wi-Fi or hotspot")
+	var hosts := ""   # 0.7.0: local Wi-Fi play is gone, so no addresses are ever shown
 	if hud_info.text != info or hud_hosts.text != hosts:
 		hud_info.text = info
 		hud_hosts.text = hosts
@@ -1002,7 +974,7 @@ func _start_autotest() -> void:
 	if not autotest.begins_with("social") and autotest != "menu":
 		social.data.name = "Bot%d" % (OS.get_process_id() % 1000)
 	if autotest == "host" or autotest == "host_rotate":
-		_on_host()
+		_autotest_host()
 	elif autotest.begins_with("pop_solo"):
 		settings.set_value("p", "pop_bots", int(OS.get_environment("POP_BOTS")) if OS.has_environment("POP_BOTS") else 4)
 		settings.set_value("p", "pop_ch", OS.get_process_id() % 8)
@@ -1015,6 +987,10 @@ func _start_autotest() -> void:
 		mode = "online"
 		game = "pop"
 		_connect(autotest.substr(8))
+	elif autotest == "studio" or autotest == "studio_rotate":
+		pass   # driven from _autotest_tick once the menu is up
+	elif autotest == "welcome":
+		_autotest_welcome()
 	elif autotest == "menu" or autotest.begins_with("social"):
 		_autotest_social_setup()
 	elif autotest.begins_with("join:"):
@@ -1023,7 +999,7 @@ func _start_autotest() -> void:
 
 
 func _autotest_tick(delta: float) -> void:
-	if autotest == "":
+	if autotest == "" or autotest == "welcome":
 		return
 	autotest_t += delta
 	if autotest.ends_with("_rotate") and autotest_t > 3.0 and not has_meta("rotated"):
@@ -1037,6 +1013,9 @@ func _autotest_tick(delta: float) -> void:
 		if fmod(autotest_t, 2.0) < delta:
 			player.jump_pressed = true
 	var limit := float(OS.get_environment("AUTOTEST_SECONDS")) if OS.has_environment("AUTOTEST_SECONDS") else 12.0
+	if autotest.begins_with("studio"):
+		_autotest_studio(limit)
+		return
 	if autotest.begins_with("social") or autotest == "menu":
 		_autotest_social_tick()
 	if autotest == "menu" and OS.has_environment("AUTOTEST_TAB") and shell and autotest_t > 1.0 and not has_meta("tab_done"):
@@ -1232,3 +1211,199 @@ func _dump_ui() -> void:
 	for l in lines:
 		print("  ", l[2])
 	print("AUTOTEST UI END")
+
+
+# ------------------------------------------------------------------ 0.7.0 invites
+var _invite_layer: CanvasLayer
+
+## A friend invited you: a card slides in with Join and Decline, in the app or in a game.
+func _on_invite_in(inv: Dictionary) -> void:
+	if _invite_layer and is_instance_valid(_invite_layer):
+		_invite_layer.queue_free()
+	var layer := CanvasLayer.new()
+	layer.layer = 60
+	add_child(layer)
+	_invite_layer = layer
+	var root := Control.new()
+	root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(root)
+	var vp := get_viewport()
+	var k := ScreenUtil.dp(vp)
+	var ins := ScreenUtil.insets(vp)
+	var full := vp.get_visible_rect().size
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", UiKit.pad(UiKit.box(UiKit.c("surface_container_high"), 24, UiKit.c("outline_variant"), 1), 16, 14))
+	var w := minf(full.x / k - 24.0, 420.0)
+	panel.custom_minimum_size = Vector2(w, 0)
+	panel.scale = Vector2(k, k)
+	panel.position = Vector2((full.x - w * k) / 2.0, ins.t + 10.0 * k)
+	root.add_child(panel)
+	var v := UiKit.vbox(10)
+	panel.add_child(v)
+	var from: Dictionary = inv.get("from", {})
+	var h := UiKit.hbox(12)
+	h.add_child(UiKit.avatar(40, str(from.get("name", "?")), int(from.get("av", -1))))
+	var col := UiKit.vbox(0)
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.add_child(UiKit.label("%s invited you" % str(from.get("name", "A friend")), "title_medium", UiKit.c("on_surface"), false))
+	col.add_child(UiKit.label("to play " + str(inv.get("title", "a game")), "body_medium", UiKit.c("on_surface_variant"), false))
+	h.add_child(col)
+	v.add_child(h)
+	var row := UiKit.hbox(10)
+	var close := func(join: bool):
+		social.request({"t": "s_invite_reply", "to": str(from.get("uid", "")), "join": join})
+		social.invites.erase(inv)
+		if is_instance_valid(layer):
+			layer.queue_free()
+	var no := UiKit.outline_button("Decline", "x-mark", func(): close.call(false))
+	no.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(no)
+	var yes := UiKit.primary_button("Join", "play", func():
+		close.call(true)
+		var what := str(inv.get("what", ""))
+		if what == "game":
+			if shell:
+				shell.join_playing({"kind": "game", "gid": str(inv.get("gid", ""))})
+		else:
+			join_friend_room(what, str(inv.get("room", ""))))
+	yes.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(yes)
+	v.add_child(row)
+	panel.modulate.a = 0.0
+	var tw := create_tween()
+	tw.tween_property(panel, "modulate:a", 1.0, 0.18)
+	# It goes away by itself after 30 seconds (counts as no answer).
+	get_tree().create_timer(30.0).timeout.connect(func():
+		if is_instance_valid(layer):
+			layer.queue_free())
+
+
+# ------------------------------------------------------------------ 0.7.0 Studio play
+var studio_play: StudioPlay
+var _studio_gid := ""
+
+## Plays a Studio level on this phone. From the editor (can_edit) the pencil goes back to it.
+func play_studio(level: Dictionary, title: String, can_edit: bool, gid: String) -> void:
+	if studio_play and is_instance_valid(studio_play):
+		studio_play.queue_free()
+	_studio_gid = gid
+	if menu_root and is_instance_valid(menu_root):
+		menu_root.visible = false
+	studio_play = StudioPlay.new()
+	var col := Color("#335FFF")
+	studio_play.setup(level, title, can_edit, str(social.data.get("name", "You")), col)
+	studio_play.finished.connect(_on_studio_finished)
+	add_child(studio_play)
+	social.set_playing("game:" + gid if gid != "" else "studio")
+
+
+func _on_studio_finished(r: Dictionary) -> void:
+	if r.get("won", false) and r.get("partial", false) and _studio_gid != "":
+		social.request({"t": "s_game_done", "gid": _studio_gid, "ms": int(r.get("ms", 0)), "stars": int(r.get("stars", 0))})
+	if not r.get("exit", false):
+		return
+	if studio_play and is_instance_valid(studio_play):
+		studio_play.queue_free()
+	studio_play = null
+	social.set_playing("")
+	if menu_root and is_instance_valid(menu_root):
+		menu_root.visible = true
+	_sync_system_bars()
+
+
+## Studio check: build from words on the phone, play it, walk around, go back to the
+## editor, change it in words and by hand, check the level stays valid at every step.
+func _autotest_studio(limit: float) -> void:
+	if shell == null:
+		return
+	var st := shell.studio
+	var step := int(get_meta("st_step", 0))
+	if step == 0 and autotest_t > 1.0:
+		shell.select_tab(1)
+		shell.push({"k": "studio"})
+		set_meta("st_step", 1)
+	elif step == 1 and autotest_t > 2.0:
+		st.build_from_words(OS.get_environment("STUDIO_PROMPT") if OS.has_environment("STUDIO_PROMPT") else "A hard lava obby with jump pads and stars at night")
+		print("AUTOTEST STUDIO built parts=%d check='%s' title=%s sky=%d playing=%s" % [st.level.parts.size(), PloxLevel.check(st.level), st.level.title, st.level.sky, str(studio_play != null)])
+		set_meta("st_step", 2)
+	elif step == 2:
+		if studio_play and studio_play.player:
+			studio_play.test_move = Vector2(sin(autotest_t) * 0.3, -1.0)
+			if fmod(autotest_t, 1.5) < 0.02:
+				studio_play.player.jump_pressed = true
+		if autotest_t > limit * 0.5:
+			print("AUTOTEST STUDIO play pos=%s stars=%d/%d" % [str(studio_play.player.global_position), studio_play._stars, studio_play._stars_total])
+			studio_play._exit(true)
+			set_meta("st_step", 3)
+	elif step == 3:
+		for w in ["Make it harder", "Add lava", "Add jump pads", "Add moving platforms", "Make it easier", "Add stars", "Make it icy", "Add checkpoints", "Call it Test Run"]:
+			st.change_with_words(w)
+			var c := PloxLevel.check(st.level)
+			print("AUTOTEST STUDIO change '%s' parts=%d check='%s'" % [w, st.level.parts.size(), c])
+		st.sel = 1
+		st._edit(func(q): q[4] = q[4] * 1.25)
+		st._add("bounce")
+		st._duplicate()
+		st._delete()
+		print("AUTOTEST STUDIO hand parts=%d check='%s' title=%s undo=%d" % [st.level.parts.size(), PloxLevel.check(st.level), st.level.title, st.undo.size()])
+		set_meta("st_step", 4)
+		if autotest.ends_with("_rotate"):
+			_set_orientation("landscape")
+	elif step == 4 and autotest_t > limit:
+		# Fuzz the quick builder with many prompts: every level must pass the checker.
+		var bad := 0
+		var prompts := ["lava", "ice tower", "candy stars", "hard spinning hammers", "easy kids", "long hard parkour race", "space jump", "x", "a b c d", "moving platforms with lava and stars and jump pads"]
+		for i in 200:
+			var lv := PloxLevel.quick_build(prompts[i % prompts.size()], null, i)
+			if PloxLevel.check(lv) != "":
+				bad += 1
+				print("AUTOTEST STUDIO bad level for '%s': %s" % [prompts[i % prompts.size()], PloxLevel.check(lv)])
+		print("AUTOTEST STUDIO fuzz 200 levels, bad=%d" % bad)
+		_dump_ui()
+		print("AUTOTEST LAYOUT ", _layout_report())
+		if OS.has_environment("AUTOTEST_SHOT"):
+			get_viewport().get_texture().get_image().save_png(OS.get_environment("AUTOTEST_SHOT"))
+		get_tree().quit()
+
+
+## Welcome check: a phone with no account sees Sign up / Log in, signs up for real against
+## the game service, and lands in the app with the new account.
+func _autotest_welcome() -> void:
+	await get_tree().create_timer(0.5).timeout
+	social.data.me = {}
+	social.data.name = ""
+	social.data.username = ""
+	social.data.friends = {}
+	social.data.chats = {}
+	social.data.used = false
+	social.data.erase("token")
+	social.data.erase("uid")
+	social.hold = social.needs_welcome()
+	shell._rebuild()
+	await get_tree().create_timer(0.5).timeout
+	var w = shell._welcome
+	print("AUTOTEST WELCOME shown=%s hold=%s url=%s" % [str(w != null), str(social.hold), social.url])
+	if w == null:
+		get_tree().quit()
+		return
+	w._go("signup")
+	var un := "wel_" + str(Time.get_ticks_msec() % 100000)
+	w._vals.username = un
+	w._name_timer.start()
+	await get_tree().create_timer(3.0).timeout
+	print("AUTOTEST WELCOME name_state='%s'" % w._name_state)
+	w._vals.password = "goodpass123"
+	w._vals.y = 2000
+	w._vals.m = 5
+	w._vals.d = 17
+	w._do_signup()
+	var t := 0.0
+	while t < 40.0 and is_instance_valid(w) and shell._welcome != null:
+		await get_tree().create_timer(0.5).timeout
+		t += 0.5
+	print("AUTOTEST WELCOME signed_up=%s username=%s logged_in=%s err='%s'" % [str(shell._welcome == null), str(social.data.get("username", "")), str(social.is_logged_in()), str(w._err) if is_instance_valid(w) else ""])
+	await get_tree().create_timer(1.0).timeout
+	_dump_ui()
+	print("AUTOTEST LAYOUT ", _layout_report())
+	get_tree().quit()

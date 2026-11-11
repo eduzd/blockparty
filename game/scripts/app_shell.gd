@@ -50,6 +50,8 @@ var _list_loaded := false
 
 
 var plux: PluxPages
+var studio: StudioPages
+var _welcome: WelcomeScreen
 
 
 func _init(p_main: Node, p_social: SocialClient, p_state: Dictionary) -> void:
@@ -78,9 +80,20 @@ func _ready() -> void:
 	social.typing.connect(_on_typing)
 	social.login_done.connect(_on_login_done)
 	social.password_saved.connect(_on_password_saved)
-	social.account_switched.connect(func(): _mark_dirty())
+	social.account_switched.connect(func():
+		if (social.hold and social.needs_welcome()) != (_welcome != null and is_instance_valid(_welcome)):
+			_rebuild()
+		else:
+			_mark_dirty())
 	_wire_eco()
 	plux = PluxPages.new(self)
+	# Studio keeps the game you're making when the app rebuilds (rotation, theme).
+	if state.get("studio") is StudioPages:
+		studio = state.studio
+		studio.s = self
+	else:
+		studio = StudioPages.new(self)
+		state["studio"] = studio
 	social.trades_changed.connect(_mark_dirty)
 	resized.connect(_on_resized)
 	call_deferred("_rebuild")
@@ -110,6 +123,12 @@ func _rebuild() -> void:
 	for ch in get_children():
 		if ch != _search_timer:
 			ch.queue_free()
+	_welcome = null
+	if social.hold and social.needs_welcome():
+		# 0.7.0: no account on this phone yet: Sign up or Log in first.
+		_welcome = WelcomeScreen.new(social)
+		add_child(_welcome)
+		return
 	_frame = HBoxContainer.new() if wide else VBoxContainer.new()
 	_frame.add_theme_constant_override("separation", 0)
 	_frame.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -237,6 +256,8 @@ func _show_current(animate: bool, direction := 0) -> void:
 			"outfits": node = plux.outfits_screen()
 			"trades": node = plux.trades_screen()
 			"trade": node = plux.new_trade_screen(str(top.uid))
+			"studio": node = studio.studio_screen()
+			"studio_edit": node = studio.edit_screen()
 			_: node = UiKit.vbox()
 		node.set_anchors_preset(Control.PRESET_FULL_RECT)
 		bg.add_child(node)
@@ -263,6 +284,8 @@ func _mark_dirty() -> void:
 func _do_refresh() -> void:
 	_dirty = false
 	if not is_inside_tree() or not is_visible_in_tree():
+		return
+	if _welcome != null and is_instance_valid(_welcome):
 		return
 	_refresh_nav()
 	_refresh_pill()
@@ -434,7 +457,7 @@ func _connection_card() -> Control:
 	if social.is_online():
 		return null
 	var title := "Connecting..."
-	var sub := "Friends and chat need the Plux server. The free server can take about a minute to wake up."
+	var sub := "Getting Plux ready. This can take about a minute."
 	var tint := UiKit.AMBER
 	if social.state == "elsewhere":
 		title = "Open on another phone"
@@ -442,7 +465,7 @@ func _connection_card() -> Control:
 		tint = UiKit.c("error")
 	elif social.state == "offline":
 		title = "Offline"
-		sub = "Add a server address in Settings to use friends and chat."
+		sub = "Can't connect. Check your internet and try again."
 		tint = UiKit.c("error")
 	var card: Array = UiKit.card()
 	card[1].add_child(UiKit.setting_row("signal", title, sub, "", tint, func():
@@ -466,7 +489,7 @@ func _home() -> Control:
 	var page := UiKit.pinned_page(title, Callable(), av_btn, [_plux_pill_live(), bell])
 	var content: VBoxContainer = page[1]
 	var room_now := Protocol.sanitize_room(main.settings.get_value("p", "room", Protocol.DEFAULT_ROOM))
-	var hero := UiKit.hero_card("Play online", "Jump into room %s on the Plux server" % room_now, "play", main._on_play_online)
+	var hero := UiKit.hero_card("Play online", "Jump into room %s with friends" % room_now, "play", main._on_play_online)
 	content.add_child(hero)
 	main.menu_buttons.append(hero)
 	main.menu_status = UiKit.label("", "body_medium", UiKit.c("error"))
@@ -615,6 +638,9 @@ func _games() -> Control:
 	var content: VBoxContainer = page[1]
 	var room_now := Protocol.sanitize_room(main.settings.get_value("p", "room", Protocol.DEFAULT_ROOM))
 	# Pop-Up Panic: the new party game, first.
+	if social.feature("studio"):
+		content.add_child(UiKit.hero_card("Create a game", "Describe it in words. Studio builds it and you play it right away", "sparkles", func(): push({"k": "studio"})))
+		content.add_child(UiKit.vspace(8))
 	var pop_hero := UiKit.hero_card("Pop-Up Panic", "New! Bonk weird heads off a sky picnic table. Play online in room %s" % room_now, "sparkles", main._on_pop_online)
 	content.add_child(pop_hero)
 	main.menu_buttons.append(pop_hero)
@@ -656,26 +682,10 @@ func _games() -> Control:
 		main.settings.save(main.SETTINGS_PATH))
 	content.add_child(rm[0])
 
-	content.add_child(UiKit.section_title("Play on the same Wi-Fi"))
-	var friends: Array = UiKit.card()
-	content.add_child(friends[0])
-	var host_row := UiKit.setting_row("wifi", "Host on this phone", "Friends on the same Wi-Fi or hotspot join you", "", UiKit.SKY_MEDIUM, main._on_host)
-	friends[1].add_child(host_row)
-	main.menu_buttons.append(host_row)
-	var fr: Array = UiKit.text_field("Friend's IP (192.168...)", main.settings.get_value("p", "friend", ""), 64, "Shown at the top of your friend's screen")
-	var friend_edit: LineEdit = fr[1]
-	friend_edit.text_changed.connect(func(t: String):
-		main.settings.set_value("p", "friend", t)
-		main.settings.save(main.SETTINGS_PATH))
-	friends[1].add_child(UiKit.vspace(4))
-	friends[1].add_child(fr[0])
-	var join_btn := UiKit.outline_button("Join friend", "users", main._on_join_friend)
-	friends[1].add_child(UiKit.margin(join_btn, 16, 12, 16, 16))
-	main.menu_buttons.append(join_btn)
-
-	content.add_child(UiKit.section_title("More games"))
-	content.add_child(UiKit.margin(UiKit.label("Making and sharing your own games comes in a later update. For now there are two: Pop-Up Panic and Neon Bounce.",
-		"body_medium", UiKit.c("on_surface_variant")), 20, 0, 20, 0))
+	if social.feature("studio"):
+		var disc := UiKit.vbox()
+		content.add_child(disc)
+		_live(disc, func(box: VBoxContainer): studio.discover_section(box))
 	_kb_spacer = UiKit.vspace(bottom_inset)
 	content.add_child(_kb_spacer)
 	content.add_child(UiKit.end_padding())
@@ -797,9 +807,9 @@ func _profile() -> Control:
 		var n: int = social.data.req_in.size()
 		card[1].add_child(UiKit.setting_row("user-plus", "Friend requests", "Received and sent", str(n) if n > 0 else "", UiKit.PINK, func(): push({"k": "requests"})))
 		card[1].add_child(UiKit.setting_row("cog-6-tooth", "Settings", "Account, password, theme, sound and screen", "", UiKit.INK if not UiKit.dark else UiKit.SKY, func(): push({"k": "settings"})))
-		var note := "Your account is saved on the server. You can log in on any phone with @%s and your password." % str(social.data.username)
+		var note := "Your account is saved to Plux. You can log in on any phone with @%s and your password." % str(social.data.username)
 		if not social.has_password():
-			note = "Your account is saved on the server. Set a password in Settings so you can log in again after reinstalling or on a new phone."
+			note = "Your account is saved to Plux. Set a password in Settings so you can log in again after reinstalling or on a new phone."
 		box.add_child(UiKit.margin(UiKit.label(note, "body_small", UiKit.c("on_surface_variant")), 20, 14, 20, 0))
 	)
 	return page[0]
@@ -850,8 +860,23 @@ func _person(u: Dictionary, with_action := true) -> Control:
 	if online and u.get("playing") is Dictionary and not u.playing.is_empty():
 		sub = "Playing " + str(u.playing.get("title", "a game"))
 		sub_col = UiKit.c("primary")
+		# 0.7.0: Join a friend's game straight from the list.
+		var pl: Dictionary = u.playing
+		if social.data.friends.has(w) and social.feature("invites") and (str(pl.get("room", "")) != "" or str(pl.get("gid", "")) != ""):
+			var jb := UiKit.small_button("Join", true, func(): join_playing(pl), "play")
+			tr = [jb]
 	return UiKit.person_row(str(u.get("name", "Player")), sub, online,
-		func(): if w != social.uid: push({"k": "user", "uid": w}), tr, sub_col, int(u.get("av", -1)), _eq(u))
+		func(): if w != social.uid: push({"k": "user", "uid": w}), tr, sub_col, int(u.get("av", -1)), _eq(u), bool(u.get("pro", false)))
+
+
+## Join what a friend is playing, or answer an invite with Join.
+func join_playing(pl: Dictionary) -> void:
+	var kind := str(pl.get("kind", pl.get("what", "")))
+	if kind == "game" and str(pl.get("gid", "")) != "":
+		studio._play_after_load = true
+		studio._ask({"t": "s_game_get", "gid": str(pl.gid)}, "load")
+	elif str(pl.get("room", "")) != "":
+		main.join_friend_room(kind, str(pl.room))
 
 
 # ------------------------------------------------------------------ screen: find people
@@ -1503,13 +1528,6 @@ func _settings_screen() -> Control:
 	rot_col.add_child(rot_row)
 	screen_card[1].add_child(UiKit.margin(rot_col, 16, 14, 16, 16))
 
-	content.add_child(UiKit.section_title("Server"))
-	var sv: Array = UiKit.text_field("Server address (wss://...)", main.server_url(), 200, "Used for online games, friends and chat")
-	var server_edit: LineEdit = sv[1]
-	server_edit.text_submitted.connect(func(t: String): main.set_server(t))
-	server_edit.focus_exited.connect(func(): main.set_server(server_edit.text))
-	content.add_child(sv[0])
-
 	content.add_child(UiKit.section_title("About"))
 	var ab: Array = UiKit.card()
 	content.add_child(ab[0])
@@ -1648,7 +1666,7 @@ func _on_login_done(ok: bool, why: String) -> void:
 		_form_button.text = "Log in"
 	match why:
 		"slow": _set_form_error("Too many tries. Wait a few minutes and try again.")
-		"offline": _set_form_error("Couldn't reach the server. The free server may be waking up, so try again in a minute.")
+		"offline": _set_form_error("Can't connect right now. Plux may be getting ready, so try again in a minute.")
 		_: _set_form_error("That username and password don't match.")
 
 

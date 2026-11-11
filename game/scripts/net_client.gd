@@ -67,7 +67,7 @@ func _open() -> void:
 	var err := _ws.connect_to_url(url)
 	if err != OK:
 		state = State.IDLE
-		gave_up.emit("That server address doesn't look right: %s" % url)
+		gave_up.emit("Can't connect right now. Try again in a moment.")
 		return
 	state = State.CONNECTING
 	_phase_started = Time.get_ticks_msec()
@@ -76,7 +76,7 @@ func _open() -> void:
 	elif _attempt == 1:
 		status_changed.emit("Connecting...", false)
 	else:
-		status_changed.emit("Waking up the server, this can take a minute (try %d)..." % _attempt, true)
+		status_changed.emit("Getting Plux ready, this can take a minute (try %d)..." % _attempt, true)
 
 
 func _process(_delta: float) -> void:
@@ -143,7 +143,7 @@ func _handle(msg: Dictionary, now: int) -> void:
 			if msg.get("fatal", false):
 				state = State.IDLE
 				_ws.close()
-				gave_up.emit(str(msg.get("msg", msg.get("code", "Server refused"))))
+				gave_up.emit(_friendly(str(msg.get("code", "")), str(msg.get("msg", ""))))
 			else:
 				message.emit(msg)
 		_:
@@ -157,7 +157,7 @@ func _schedule_retry(now: int) -> void:
 		_attempt = 0
 	if now - _trying_since > GIVE_UP_AFTER_MS:
 		state = State.IDLE
-		gave_up.emit("Couldn't reach the server. Check the address and your internet, then try again.")
+		gave_up.emit("Can't connect. Check your internet and try again.")
 		return
 	var wait_ms := mini(1000 * int(pow(2.0, float(mini(_attempt, 3)))), 8000)
 	state = State.RETRY_WAIT
@@ -165,4 +165,18 @@ func _schedule_retry(now: int) -> void:
 	if ever_joined:
 		status_changed.emit("Connection lost. Reconnecting...", true)
 	else:
-		status_changed.emit("Waking up the server, this can take a minute...", true)
+		status_changed.emit("Getting Plux ready, this can take a minute...", true)
+
+
+## Turns a refusal from the game service into words for players, with no technical details.
+static func _friendly(code: String, msg: String) -> String:
+	match code:
+		"room_full": return "That room is full. Try another room code."
+		"banned": return msg if msg != "" else "Your account can't play right now."
+		"maintenance": return "Plux is under maintenance. Try again soon."
+		"old_version": return "Please update Plux to keep playing."
+		"rate_limit": return "Too many tries. Wait a moment and try again."
+	# Plain sentences written for players pass through; anything technical doesn't.
+	if msg != "" and not msg.contains("://") and not msg.contains("port") and msg.length() < 160:
+		return msg
+	return "Can't connect right now. Try again."

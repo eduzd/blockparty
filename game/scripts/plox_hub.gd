@@ -902,11 +902,17 @@ func _ai_build(me: String, msg: Dictionary, reply: Callable, now: int) -> void:
 	if not cfg.b("f_ai") or not cfg.b("f_studio"):
 		fail.call("AI building is switched off right now.")
 		return
-	if not ai_ready():
-		fail.call("AI building isn't set up on the server yet.")
-		return
 	if prompt.length() < 4:
 		fail.call("Describe your game in a few words first.")
+		return
+	if not ai_ready():
+		# No AI service set up yet: the built-in word builder makes the game instead,
+		# so Studio still works. It costs nothing, so it doesn't use up daily AI builds.
+		var base0 = PloxLevel.clean(msg.base, cfg.i("studio_max_parts")) if msg.get("base") is Dictionary else null
+		var lv := PloxLevel.clean(PloxLevel.quick_build(prompt, base0), cfg.i("studio_max_parts"))
+		lv.title = filter_text(lv.title)
+		count("ai_quick")
+		reply.call({"t": "s_ai_res", "ok": true, "level": lv, "quick": true, "left": -1})
 		return
 	if _ai_busy.has(me):
 		fail.call("Your last game is still being built.")
@@ -934,7 +940,11 @@ func _ai_build(me: String, msg: Dictionary, reply: Callable, now: int) -> void:
 		if ok:
 			reply.call({"t": "s_ai_res", "ok": true, "level": level, "left": maxi(0, ai_cap_for(me) - _ai_used_today(me))})
 		else:
-			reply.call({"t": "s_ai_res", "ok": false, "why": "The AI couldn't build that one (%s). Try describing it differently." % why}), false, {}, change)
+			# The AI failed: hand back a game from the word builder so the player isn't stuck.
+			var lv2 := PloxLevel.clean(PloxLevel.quick_build(prompt, change if not change.is_empty() else null), cfg.i("studio_max_parts"))
+			lv2.title = filter_text(lv2.title)
+			reply.call({"t": "s_ai_res", "ok": true, "level": lv2, "quick": true, "why": "The AI couldn't build that one (%s), so the quick builder made it." % why,
+				"left": maxi(0, ai_cap_for(me) - _ai_used_today(me))}), false, {}, change)
 
 
 func _ai_used_today(uid: String) -> int:
