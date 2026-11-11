@@ -79,9 +79,16 @@ const state = (c, p, y = 0) => send(c, { t: 'state', p, y });
   // Ana faces +X (yaw -pi/2 faces +X) and bonks Ben, who is 1.5 m away.
   a.inbox.length = 0; b.inbox.length = 0;
   send(a, { t: 'bonk', y: -Math.PI / 2 });
-  const hitMsg = await wait(b, m => m.t === 'bonk' && m.id === a.id);
+  // Bots bonk too, so take the bump the server sent just before Ana's bonk news.
+  let hitMsg = null, bump = null, prevBump = null;
+  const end1 = Date.now() + 3000;
+  while (Date.now() < end1 && !hitMsg) {
+    const m = b.inbox.shift();
+    if (!m) { await sleep(20); continue; }
+    if (m.t === 'bump') prevBump = m;
+    else if (m.t === 'bonk' && m.id === a.id) { hitMsg = m; bump = prevBump; }
+  }
   ok(hitMsg && hitMsg.hit.includes(b.id), 'bonk hits Ben (hit list to everyone)');
-  const bump = await wait(b, m => m.t === 'bump');
   bPos = [4.5, 1.0, 0];   // like a real phone: Ben is flying now, not landed
   ok(bump && bump.v[0] > 8 && bump.v[1] > 4, 'Ben gets knocked away from Ana and upward (v=' + (bump && bump.v.map(x => x.toFixed(1))) + ')');
   // Too soon: ignored.
@@ -94,9 +101,22 @@ const state = (c, p, y = 0) => send(c, { t: 'state', p, y });
   ok(miss && !miss.hit.includes(b.id), 'a bonk facing away misses');
   // Wobble: the second hit is stronger.
   await sleep(700);
+  // Bots also bonk Ben now and then; only count the bump that follows Ana's hit,
+  // and compare the push strength (bots can hit him from another side).
+  b.inbox.length = 0;
   send(a, { t: 'bonk', y: -Math.PI / 2 });
-  const bump2 = await wait(b, m => m.t === 'bump');
-  ok(bump && bump2 && bump2.v[0] > bump.v[0], 'each hit makes the next one stronger (' + (bump2 && bump2.v[0].toFixed(1)) + ' > ' + (bump && bump.v[0].toFixed(1)) + ')');
+  let bump2 = null;
+  const end2 = Date.now() + 3000;
+  // The server sends the victim's bump just before it tells everyone about the bonk.
+  let lastBump = null;
+  while (Date.now() < end2 && !bump2) {
+    const m = b.inbox.shift();
+    if (!m) { await sleep(20); continue; }
+    if (m.t === 'bump') lastBump = m;
+    else if (m.t === 'bonk' && m.id === a.id && m.hit.includes(b.id)) bump2 = lastBump;
+  }
+  const hz = v => Math.hypot(v[0], v[2]);
+  ok(bump && bump2 && hz(bump2.v) > hz(bump.v), 'each hit makes the next one stronger (' + (bump2 && hz(bump2.v).toFixed(1)) + ' > ' + (bump && hz(bump.v).toFixed(1)) + ')');
 
   // Ben falls off: the knockout goes to Ana.
   clearInterval(bTimer);
