@@ -132,7 +132,19 @@ func _turn_on() -> void:
 	else:
 		state = State.ASKING
 		changed.emit()
-		OS.request_permission(MIC_PERMISSION)
+		if OS.get_name() == "Android":
+			OS.request_permission(MIC_PERMISSION)
+		else:
+			# iOS: the plugin shows the system prompt; wait for the answer.
+			for i in 60:
+				await get_tree().create_timer(0.5).timeout
+				if state != State.ASKING:
+					return
+				if _plugin.hasMicPermission():
+					_start_engine()
+					return
+			state = State.OFF
+			changed.emit()
 
 
 func _on_permission_result(permission: String, granted: bool) -> void:

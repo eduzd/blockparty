@@ -59,5 +59,6 @@ static func apply_orientation(mode: String) -> void:
 		var s := DisplayServer.window_get_size()
 		var want_wide := mode == "landscape"
 		if (s.x > s.y) != want_wide:
-			DisplayServer.window_set_size(Vector2i(s.y, s.x))
+			var w := (Engine.get_main_loop() as SceneTree).root
+			w.size = Vector2i(s.y, s.x)
 			print("[screen] window turned to ", Vector2i(s.y, s.x))

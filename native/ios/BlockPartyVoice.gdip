@@ -1,0 +1,16 @@
+[config]
+name="BlockPartyVoice"
+binary="BlockPartyVoice.xcframework"
+initialization="register_blockparty_voice"
+deinitialization="unregister_blockparty_voice"
+
+[dependencies]
+linked=[]
+embedded=["WebRTC.xcframework"]
+system=["AVFoundation.framework", "AudioToolbox.framework"]
+capabilities=[]
+files=[]
+linker_flags=["-ObjC"]
+
+[plist]
+NSMicrophoneUsageDescription:string_input="Block Party uses the microphone for voice chat with players in your room."
