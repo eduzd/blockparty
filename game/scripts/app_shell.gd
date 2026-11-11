@@ -76,6 +76,7 @@ func _ready() -> void:
 	social.login_done.connect(_on_login_done)
 	social.password_saved.connect(_on_password_saved)
 	social.account_switched.connect(func(): _mark_dirty())
+	_wire_eco()
 	resized.connect(_on_resized)
 	call_deferred("_rebuild")
 
@@ -191,6 +192,7 @@ func _show_current(animate: bool, direction := 0) -> void:
 	social.close_chat()
 	_chat_uid = ""
 	_kb_spacer = null
+	_pill_holder = null
 	_refresh = Callable()
 	main.menu_buttons.clear()
 	for ch in _page_holder.get_children():
@@ -223,6 +225,8 @@ func _show_current(animate: bool, direction := 0) -> void:
 			"settings": node = _settings_screen()
 			"password": node = _password_screen()
 			"login": node = _login_screen()
+			"shop": node = _shop_screen()
+			"item": node = _item_screen(str(top.id))
 			_: node = UiKit.vbox()
 		node.set_anchors_preset(Control.PRESET_FULL_RECT)
 		bg.add_child(node)
@@ -251,6 +255,7 @@ func _do_refresh() -> void:
 	if not is_inside_tree() or not is_visible_in_tree():
 		return
 	_refresh_nav()
+	_refresh_pill()
 	if _refresh.is_valid():
 		_refresh.call()
 
@@ -419,7 +424,7 @@ func _connection_card() -> Control:
 	if social.is_online():
 		return null
 	var title := "Connecting..."
-	var sub := "Friends and chat need the Block Party server. The free server can take about a minute to wake up."
+	var sub := "Friends and chat need the Plux server. The free server can take about a minute to wake up."
 	var tint := UiKit.AMBER
 	if social.state == "elsewhere":
 		title = "Open on another phone"
@@ -447,11 +452,11 @@ func _home() -> Control:
 	av_btn.add_child(av)
 	av.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var bell := UiKit.icon_button("bell", func(): push({"k": "requests"}), Color(0, 0, 0, 0), social.data.req_in.size())
-	var title := ("Hi, " + _first_name()) if _first_name() != "" else "Block Party"
-	var page := UiKit.pinned_page(title, Callable(), av_btn, [bell])
+	var title := ("Hi, " + _first_name()) if _first_name() != "" else "Plux"
+	var page := UiKit.pinned_page(title, Callable(), av_btn, [_plux_pill_live(), bell])
 	var content: VBoxContainer = page[1]
 	var room_now := Protocol.sanitize_room(main.settings.get_value("p", "room", Protocol.DEFAULT_ROOM))
-	var hero := UiKit.hero_card("Play online", "Jump into room %s on the Block Party server" % room_now, "play", main._on_play_online)
+	var hero := UiKit.hero_card("Play online", "Jump into room %s on the Plux server" % room_now, "play", main._on_play_online)
 	content.add_child(hero)
 	main.menu_buttons.append(hero)
 	main.menu_status = UiKit.label("", "body_medium", UiKit.c("error"))
@@ -471,6 +476,7 @@ func _home() -> Control:
 		grid.add_child(UiKit.quick_cell("user-plus", "Requests", func(): push({"k": "requests"}), social.data.req_in.size()))
 		grid.add_child(UiKit.quick_cell("chat-bubble-left-right", "Chats", func(): select_tab(2), social.unread_total()))
 		box.add_child(UiKit.margin(grid, 12, 6, 12, 0))
+		box.add_child(UiKit.margin(_wallet_card(), 0, 14, 0, 0))
 
 		var online := []
 		for w in social.data.friends:
@@ -702,7 +708,7 @@ func _convo_row(cv: Dictionary) -> Control:
 	meta.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	trailing.append(meta)
 	return UiKit.person_row(str(u.get("name", "Player")), sub, bool(u.get("online", false)),
-		func(): push({"k": "chat", "uid": w}), trailing, UiKit.c("on_surface") if unread > 0 else Color(0, 0, 0, 0), int(u.get("av", -1)))
+		func(): push({"k": "chat", "uid": w}), trailing, UiKit.c("on_surface") if unread > 0 else Color(0, 0, 0, 0), int(u.get("av", -1)), _eq(u))
 
 
 func _chats() -> Control:
@@ -749,7 +755,7 @@ func _profile() -> Control:
 		var me: Dictionary = social.data.me
 		var edit := UiKit.outline_button("Edit profile", "pencil", func(): push({"k": "edit"}))
 		box.add_child(UiKit.profile_header(str(social.data.name), str(social.data.username), str(social.data.bio),
-			social.is_online(), [edit], "", int(social.data.get("av", -1))))
+			social.is_online(), [edit], "", int(social.data.get("av", -1)), social.equipped_cards()))
 		var stats := UiKit.hbox(10)
 		stats.add_child(UiKit.stat_tile(social.data.friends.size(), "Friends", func(): push({"k": "list", "uid": social.uid, "kind": "friends"})))
 		stats.add_child(UiKit.stat_tile(int(me.get("followers", 0)), "Followers", func(): push({"k": "list", "uid": social.uid, "kind": "followers"})))
@@ -758,6 +764,12 @@ func _profile() -> Control:
 		var cc := _connection_card()
 		if cc:
 			box.add_child(UiKit.margin(cc, 0, 8, 0, 0))
+		box.add_child(UiKit.margin(_wallet_card(), 0, 12, 0, 0))
+		box.add_child(UiKit.section_title("Avatar"))
+		var ac: Array = UiKit.card()
+		box.add_child(ac[0])
+		ac[1].add_child(UiKit.setting_row("tag", "Avatar shop", "Hats, faces, backs and effects", "", UiKit.SKY_MEDIUM, func(): _shop_slot = ""; push({"k": "shop"})))
+		ac[1].add_child(UiKit.setting_row("cube", "My items", "Wear what you own", str(social.eco.get("inv", []).size()) if social.eco.get("inv", []).size() > 0 else "", UiKit.PINK, func(): _shop_slot = "mine"; push({"k": "shop"})))
 		box.add_child(UiKit.section_title("People"))
 		var card: Array = UiKit.card()
 		box.add_child(card[0])
@@ -814,8 +826,12 @@ func _person(u: Dictionary, with_action := true) -> Control:
 	if online:
 		sub = (sub + "  ·  Online") if sub != "" else "Online"
 	var tr := [_row_action(u)] if with_action else []
+	var sub_col := Color(0, 0, 0, 0)
+	if online and u.get("playing") is Dictionary and not u.playing.is_empty():
+		sub = "Playing " + str(u.playing.get("title", "a game"))
+		sub_col = UiKit.c("primary")
 	return UiKit.person_row(str(u.get("name", "Player")), sub, online,
-		func(): if w != social.uid: push({"k": "user", "uid": w}), tr, Color(0, 0, 0, 0), int(u.get("av", -1)))
+		func(): if w != social.uid: push({"k": "user", "uid": w}), tr, sub_col, int(u.get("av", -1)), _eq(u))
 
 
 # ------------------------------------------------------------------ screen: find people
@@ -849,7 +865,7 @@ func _search_screen() -> Control:
 			if _search_waiting:
 				box.add_child(UiKit.margin(UiKit.label("Searching...", "body_medium", UiKit.c("on_surface_variant")), 20, 16, 20, 0))
 			elif _search_q == "":
-				box.add_child(UiKit.empty_state("users", "No one else yet", "When your friends install Block Party, they'll show up here. Ask them for their @username."))
+				box.add_child(UiKit.empty_state("users", "No one else yet", "When your friends install Plux, they'll show up here. Ask them for their @username."))
 			else:
 				box.add_child(UiKit.empty_state("magnifying-glass", "No one found", "Check the spelling, or ask your friend for their @username."))
 			return
@@ -915,7 +931,7 @@ func _user_screen(w: String) -> Control:
 		if r.friend:
 			note += "  ·  Friends"
 		box.add_child(UiKit.profile_header(str(u.get("name", "Player")), str(u.get("username", "")), str(u.get("bio", "")),
-			bool(u.get("online", false)), actions, note, int(u.get("av", -1))))
+			bool(u.get("online", false)), actions, note, int(u.get("av", -1)), _eq(u)))
 		if r.req_in:
 			var dec := UiKit.text_button("Decline request", UiKit.c("on_surface_variant"), func(): _act(social.decline(w)))
 			dec.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -1178,7 +1194,7 @@ func _fill_chat() -> void:
 	if chat.is_empty():
 		var u: Dictionary = social.card_for(_chat_uid)
 		_chat_list.add_child(UiKit.empty_state("chat-bubble-left-right", "Say hi to %s" % str(u.get("name", "your friend")),
-			"Messages are saved on your phones. If your friend is offline, they get them next time they open Block Party."))
+			"Messages are saved on your phones. If your friend is offline, they get them next time they open Plux."))
 		return
 	var last_day := ""
 	var start := maxi(chat.size() - 150, 0)
@@ -1466,7 +1482,7 @@ func _settings_screen() -> Control:
 	content.add_child(UiKit.section_title("About"))
 	var ab: Array = UiKit.card()
 	content.add_child(ab[0])
-	ab[1].add_child(UiKit.setting_row("information-circle", "Block Party", "Version %s" % str(ProjectSettings.get_setting("application/config/version", "")), "", UiKit.SKY_MEDIUM, func(): pass))
+	ab[1].add_child(UiKit.setting_row("information-circle", "Plux", "Version %s" % str(ProjectSettings.get_setting("application/config/version", "")), "", UiKit.SKY_MEDIUM, func(): pass))
 	_kb_spacer = UiKit.vspace(bottom_inset)
 	content.add_child(_kb_spacer)
 	content.add_child(UiKit.end_padding())
@@ -1616,3 +1632,358 @@ func _on_notice(kind: String, who: Dictionary) -> void:
 		"request": _toast("%s sent you a friend request" % n)
 		"friends": _toast("You and %s are now friends" % n)
 		"follow": _toast("%s started following you" % n)
+
+
+# ------------------------------------------------------------------ Plux and the avatar shop (0.6.0)
+
+var _shop_slot := ""      # "" shows every slot
+var _shop_busy := ""      # item id waiting for the server
+var _item_status: Label
+
+
+static func _fmt_plux(n: int) -> String:
+	var s := str(absi(n))
+	var out := ""
+	while s.length() > 3:
+		out = "," + s.substr(s.length() - 3) + out
+		s = s.substr(0, s.length() - 3)
+	return ("-" if n < 0 else "") + s + out
+
+
+## The coin and a number, side by side.
+func _plux_amount(n: int, token := "title_small", coin := 18.0, col: Color = Color(0, 0, 0, 0)) -> Control:
+	var h := UiKit.hbox(5)
+	h.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var c := ItemArt.plux(coin)
+	c.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	h.add_child(c)
+	var l := UiKit.label(_fmt_plux(n), token, col if col.a > 0 else UiKit.c("on_surface"), false)
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	h.add_child(l)
+	return h
+
+
+## Balance pill for top bars; tapping it opens the shop.
+func _plux_pill() -> Control:
+	var row := UiKit.TapRow.new()
+	row.on_tap = func(): push({"k": "shop"})
+	row.add_theme_stylebox_override("panel", UiKit.pad(UiKit.box(UiKit.c("surface_container_high"), 50), 10, 6))
+	row.add_child(_plux_amount(int(social.eco.get("coins", 0)), "label_large", 18))
+	row.get_child(0).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	return row
+
+
+func _wire_eco() -> void:
+	if social.eco_changed.is_connected(_mark_dirty):
+		return
+	social.eco_changed.connect(_mark_dirty)
+	social.plux_earned.connect(_on_plux_earned)
+	social.reply.connect(_on_reply)
+	social.banned.connect(func(text: String): _toast(text))
+
+
+func _on_plux_earned(amount: int, why: String) -> void:
+	if amount <= 0:
+		return
+	var words := {"daily": "daily reward", "round": "playing a round", "win": "winning", "publish": "publishing"}
+	_toast("+%s Plux for %s" % [_fmt_plux(amount), words.get(why, why)] if words.has(why) else "+%s Plux" % _fmt_plux(amount))
+
+
+func _on_reply(t: String, msg: Dictionary) -> void:
+	match t:
+		"s_buy_res":
+			_shop_busy = ""
+			if bool(msg.get("ok", false)):
+				var it: Dictionary = social.shop_by_id.get(str(msg.get("item", "")), {})
+				var serial := int(msg.get("serial", 0))
+				_toast("You got %s%s. Tap Wear to put it on." % [str(it.get("name", "it")), (" #%d" % serial) if serial > 0 else ""])
+			else:
+				_set_item_status(str(msg.get("why", "Couldn't buy that. Try again.")))
+			_mark_dirty()
+		"s_daily_res":
+			if not bool(msg.get("ok", false)):
+				_toast("You already got today's reward. Come back tomorrow.")
+			_mark_dirty()
+		"s_equip_res":
+			_shop_busy = ""
+			_mark_dirty()
+
+
+func _set_item_status(t: String) -> void:
+	if _item_status and is_instance_valid(_item_status):
+		_item_status.text = t
+		_item_status.visible = t != ""
+
+
+func _claim_daily() -> void:
+	_act(social.request({"t": "s_daily"}))
+
+
+## Home and Profile: balance, today's reward and a way into the shop.
+func _wallet_card() -> Control:
+	var card: Array = UiKit.card()
+	var h := UiKit.hbox(12)
+	var coin := ItemArt.plux(40)
+	coin.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	h.add_child(coin)
+	var col := UiKit.vbox(0)
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.add_child(UiKit.label(_fmt_plux(int(social.eco.get("coins", 0))) + " Plux", "title_large", UiKit.c("on_surface"), false))
+	var sub := ("Daily reward ready" if bool(social.eco.get("daily_ready", false)) else "Play to earn more") if social.is_online() else "Offline"
+	var sl := UiKit.label(sub, "body_small", UiKit.c("on_surface_variant"), false)
+	sl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	sl.clip_text = true
+	col.add_child(sl)
+	h.add_child(col)
+	var actions := UiKit.hbox(8)
+	actions.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	if bool(social.eco.get("daily_ready", false)) and social.is_online():
+		actions.add_child(UiKit.small_button("Get %d" % int(social.eco.get("daily", 0)), true, _claim_daily, "sparkles"))
+	elif social.feature("shop"):
+		actions.add_child(UiKit.small_button("Shop", false, func(): push({"k": "shop"}), "tag"))
+	h.add_child(actions)
+	card[1].add_child(UiKit.margin(h, 16, 14, 14, 14))
+	return card[0]
+
+
+func _slot_of(id: String) -> String:
+	return str(social.shop_by_id.get(id, {}).get("slot", ""))
+
+
+func _is_worn(id: String) -> bool:
+	return id in social.eco.get("eq", [])
+
+
+## Puts an item on (replacing whatever is in its slot) or takes it off.
+func _toggle_wear(id: String) -> void:
+	var eq: Array = social.eco.get("eq", []).duplicate()
+	if id in eq:
+		eq.erase(id)
+	else:
+		var slot := _slot_of(id)
+		for other in eq.duplicate():
+			if _slot_of(str(other)) == slot:
+				eq.erase(other)
+		eq.append(id)
+	_shop_busy = id
+	if not social.request({"t": "s_equip", "eq": eq}):
+		_shop_busy = ""
+		_offline_toast()
+	_mark_dirty()
+
+
+func _buy(id: String) -> void:
+	_set_item_status("")
+	_shop_busy = id
+	if not social.request({"t": "s_buy", "item": id}):
+		_shop_busy = ""
+		_offline_toast()
+	_mark_dirty()
+
+
+## One shop tile: the item drawn alone, its name and price (or Owned / Wearing).
+func _item_tile(it: Dictionary, w: float) -> Control:
+	var id := str(it.get("id", ""))
+	var row := UiKit.TapRow.new()
+	row.on_tap = func(): push({"k": "item", "id": id})
+	row.custom_minimum_size = Vector2(w, 0)
+	row.add_theme_stylebox_override("panel", UiKit.box(UiKit.c("surface_container"), 20, UiKit.c("outline_variant"), 1))
+	var col := UiKit.vbox(4)
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var art_bg := PanelContainer.new()
+	art_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	art_bg.add_theme_stylebox_override("panel", UiKit.box(UiKit.c("surface_container_high"), 14))
+	var art := ItemArt.over(minf(w - 36, 84), [{"art": it.get("art", ""), "col": it.get("col", "#FFFFFF"), "slot": it.get("slot", "")}])
+	art.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	art_bg.add_child(UiKit.margin(art, 4, 6, 4, 6))
+	col.add_child(art_bg)
+	var nm := UiKit.label(str(it.get("name", "")), "title_small", UiKit.c("on_surface"), false)
+	nm.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	nm.clip_text = true
+	col.add_child(nm)
+	if social.owns_item(id):
+		var t := "Wearing" if _is_worn(id) else "Owned"
+		col.add_child(UiKit.label(t, "label_medium", UiKit.c("tertiary") if _is_worn(id) else UiKit.c("on_surface_variant"), false))
+	elif it.has("left") and int(it.left) <= 0:
+		col.add_child(UiKit.label("Sold out", "label_medium", UiKit.c("error"), false))
+	else:
+		col.add_child(_plux_amount(int(it.get("price", 0)), "label_large", 16))
+	if bool(it.get("rare", false)):
+		var rare := UiKit.label("LIMITED" if not it.has("left") else "LIMITED · %d left" % int(it.left), "label_small", UiKit.PINK, false)
+		col.add_child(rare)
+	row.add_child(UiKit.margin(col, 8, 8, 8, 10))
+	row.get_child(0).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	UiKit.add_press_shrink_row(row)
+	return row
+
+
+func _tile_grid(list: Array) -> Control:
+	var avail := minf(maxf(size.x - (92.0 if wide else 0.0), 320.0), 760.0) - 32.0
+	var cols := clampi(int(avail / 150.0), 2, 5)
+	var gap := 10.0
+	var w := floorf((avail - gap * (cols - 1)) / cols)
+	var grid := GridContainer.new()
+	grid.columns = cols
+	grid.add_theme_constant_override("h_separation", int(gap))
+	grid.add_theme_constant_override("v_separation", int(gap))
+	for it in list:
+		grid.add_child(_item_tile(it, w))
+	return UiKit.margin(grid, 16, 0, 16, 0)
+
+
+func _shop_screen() -> Control:
+	var page := UiKit.pinned_page("Shop", pop, null, [_plux_pill_live()])
+	var content: VBoxContainer = page[1]
+	var live := UiKit.vbox()
+	content.add_child(live)
+	content.add_child(UiKit.end_padding())
+	if social.shop.is_empty():
+		social.request({"t": "s_eco"})
+	_live(live, func(box: VBoxContainer):
+		var cc := _connection_card()
+		if cc:
+			box.add_child(cc)
+		box.add_child(UiKit.margin(_wallet_card(), 0, 8, 0, 0))
+		if not social.feature("shop"):
+			box.add_child(UiKit.margin(UiKit.empty_state("tag", "The shop is closed", "It'll be back soon."), 16, 16, 16, 0))
+			return
+		var chips := HFlowContainer.new()
+		chips.add_theme_constant_override("h_separation", 8)
+		chips.add_theme_constant_override("v_separation", 8)
+		chips.add_child(UiKit.chip("All", _shop_slot == "", func(): _shop_slot = ""; _mark_dirty()))
+		for s in PloxCatalog.SLOTS:
+			var slot: String = s
+			chips.add_child(UiKit.chip(PloxCatalog.SLOT_NAMES[slot], _shop_slot == slot, func(): _shop_slot = slot; _mark_dirty()))
+		var mine := UiKit.chip("My items", _shop_slot == "mine", func(): _shop_slot = "mine"; _mark_dirty())
+		chips.add_child(mine)
+		box.add_child(UiKit.margin(chips, 16, 16, 16, 4))
+		var list := []
+		for it in social.shop:
+			var id := str(it.get("id", ""))
+			if _shop_slot == "mine":
+				if social.owns_item(id):
+					list.append(it)
+			elif _shop_slot == "" or str(it.get("slot", "")) == _shop_slot:
+				list.append(it)
+		if social.shop.is_empty():
+			var msg := "Loading the shop..." if social.is_online() else "Connect to the internet to see the shop."
+			box.add_child(UiKit.margin(UiKit.empty_state("tag", "Nothing here yet", msg), 16, 16, 16, 0))
+		elif list.is_empty():
+			box.add_child(UiKit.margin(UiKit.empty_state("cube", "No items yet", "Things you buy show up here. Tap an item to wear it."), 16, 16, 16, 0))
+		else:
+			if _shop_slot == "":
+				var rare := []
+				var rest := []
+				for it in list:
+					(rare if bool(it.get("rare", false)) else rest).append(it)
+				if not rare.is_empty():
+					box.add_child(UiKit.section_title("Limited"))
+					box.add_child(_tile_grid(rare))
+				box.add_child(UiKit.section_title("Everything"))
+				box.add_child(_tile_grid(rest))
+			else:
+				box.add_child(UiKit.vspace(8))
+				box.add_child(_tile_grid(list))
+		box.add_child(UiKit.margin(UiKit.label("Plux are earned by playing and from the daily reward. You can't buy them with real money.",
+			"body_small", UiKit.c("on_surface_variant")), 20, 16, 20, 0))
+	)
+	return page[0]
+
+
+## The balance in a top bar; _do_refresh redraws it when the Plux change.
+var _pill_holder: MarginContainer
+
+
+func _plux_pill_live() -> Control:
+	_pill_holder = MarginContainer.new()
+	_pill_holder.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_pill_holder.add_child(_plux_pill())
+	return _pill_holder
+
+
+func _refresh_pill() -> void:
+	if _pill_holder and is_instance_valid(_pill_holder):
+		for ch in _pill_holder.get_children():
+			ch.queue_free()
+		_pill_holder.add_child(_plux_pill())
+
+
+func _item_screen(id: String) -> Control:
+	var it: Dictionary = social.shop_by_id.get(id, {})
+	var page := UiKit.pinned_page(str(it.get("name", "Item")), pop, null, [_plux_pill_live()])
+	var content: VBoxContainer = page[1]
+	var live := UiKit.vbox()
+	content.add_child(live)
+	content.add_child(UiKit.end_padding())
+	_item_status = null
+	_live(live, func(box: VBoxContainer):
+		it = social.shop_by_id.get(id, {})
+		if it.is_empty():
+			box.add_child(UiKit.margin(UiKit.empty_state("tag", "Item not found", "It may have left the shop."), 16, 16, 16, 0))
+			return
+		var owns := social.owns_item(id)
+		var worn := _is_worn(id)
+		# Preview: you, wearing what you have on now plus this item in its slot.
+		var eq := []
+		for e in social.eco.get("eq", []):
+			if social.shop_by_id.has(e) and _slot_of(str(e)) != str(it.slot):
+				var s: Dictionary = social.shop_by_id[e]
+				eq.append({"art": s.art, "col": s.col, "slot": s.slot})
+		eq.append({"art": it.art, "col": it.col, "slot": it.slot})
+		var stage := PanelContainer.new()
+		stage.add_theme_stylebox_override("panel", UiKit.box(UiKit.c("surface_container"), 24, UiKit.c("outline_variant"), 1))
+		var dressed := ItemArt.dressed(168, str(social.data.name), int(social.data.get("av", -1)), eq)
+		dressed.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		stage.add_child(UiKit.margin(dressed, 16, 22, 16, 22))
+		box.add_child(UiKit.margin(stage, 16, 8, 16, 0))
+		var info := UiKit.vbox(6)
+		var tags := UiKit.hbox(8)
+		tags.add_child(UiKit.label(str(PloxCatalog.SLOT_NAMES.get(str(it.slot), "Item")).to_upper(), "section", UiKit.c("primary"), false))
+		if bool(it.get("rare", false)):
+			tags.add_child(UiKit.label("LIMITED", "section", UiKit.PINK, false))
+		info.add_child(tags)
+		info.add_child(UiKit.label(str(it.name), "headline_small", UiKit.c("on_surface")))
+		if owns:
+			var serial := 0
+			for o in social.eco.get("inv", []):
+				if str(o.get("item", "")) == id:
+					serial = int(o.get("serial", 0))
+			info.add_child(UiKit.label("You own this%s." % ((" (#%d)" % serial) if serial > 0 else ""), "body_medium", UiKit.c("on_surface_variant")))
+		else:
+			info.add_child(_plux_amount(int(it.price), "title_large", 26))
+			if it.has("left"):
+				info.add_child(UiKit.label("%d of %d left" % [int(it.left), int(it.get("stock", 0))] if int(it.get("stock", 0)) > 0 else "%d left" % int(it.left),
+					"body_medium", UiKit.c("on_surface_variant")))
+		box.add_child(UiKit.margin(info, 20, 16, 20, 0))
+		var btn: Button
+		var busy := _shop_busy == id
+		if owns:
+			btn = UiKit.primary_button("Take off" if worn else "Wear", "check" if not worn else "x-mark", func(): _toggle_wear(id))
+		else:
+			var coins := int(social.eco.get("coins", 0))
+			var sold_out := it.has("left") and int(it.left) <= 0
+			var btext := "Sold out" if sold_out else ("Buy for %s Plux" % _fmt_plux(int(it.price)) if coins >= int(it.price) else "Need %s more Plux" % _fmt_plux(int(it.price) - coins))
+			btn = UiKit.primary_button(btext, "tag", func(): _buy(id))
+			btn.disabled = sold_out or coins < int(it.price) or not social.is_online()
+		if busy:
+			btn.disabled = true
+			btn.text = "One moment..."
+		box.add_child(UiKit.margin(btn, 16, 18, 16, 0))
+		_item_status = UiKit.label("", "body_medium", UiKit.c("error"))
+		_item_status.visible = false
+		box.add_child(UiKit.margin(_item_status, 20, 10, 20, 0))
+		if not social.is_online():
+			box.add_child(UiKit.margin(UiKit.label("You're offline. Connect to buy or wear items.", "body_small", UiKit.c("on_surface_variant")), 20, 10, 20, 0))
+		elif bool(it.get("rare", false)) and not owns:
+			box.add_child(UiKit.margin(UiKit.label("Limited items are numbered and won't come back once they sell out.", "body_small", UiKit.c("on_surface_variant")), 20, 10, 20, 0))
+	)
+	return page[0]
+
+
+## The items a person has on, as the cards ItemArt draws.
+func _eq(u: Dictionary) -> Array:
+	var e = u.get("eq", [])
+	if u.get("uid", "") == social.uid:
+		return social.equipped_cards()
+	return e if e is Array else []

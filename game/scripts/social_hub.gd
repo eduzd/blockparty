@@ -35,6 +35,7 @@ var history := {}     # "uidA:uidB" -> [{mid, from, text, ts}] (latest MAX_HISTO
 var login_fails := {} # username -> [count, since_unix]
 var store: NeonStore = null
 var _send: Callable   # (cid, Dictionary) -> void
+var plox: PloxHub = null   # 0.6.0: Plux, shop, Studio, AI, moderation, admin
 var _log: Callable
 
 
@@ -147,6 +148,8 @@ func card(uid: String, viewer: String = "") -> Dictionary:
 		out["friend"] = friends.get(viewer, {}).has(uid)
 		out["req_out"] = requests.get(uid, {}).has(viewer)
 		out["req_in"] = requests.get(viewer, {}).has(uid)
+	if plox != null:
+		plox.card_extra(uid, out)
 	return out
 
 
@@ -202,6 +205,12 @@ func on_hello(cid: int, msg: Dictionary, now_unix: int) -> String:
 		if not (key is String) or key.length() < 32 or key.length() > 128:
 			return "bad_key"
 		uid = uid_for_key(key)
+	if plox != null:
+		var banned := plox.ban_reason(uid)
+		if banned != "":
+			_send.call(cid, {"t": "error", "code": "banned", "msg": banned, "fatal": true})
+			return "banned"
+	var is_new_account := not users.has(uid)
 	# One live connection per account: the newest wins.
 	if _online(uid):
 		var old := int(users[uid].cid)
@@ -295,6 +304,8 @@ func on_hello(cid: int, msg: Dictionary, now_unix: int) -> String:
 	me["has_pw"] = str(u.get("pw", "")) != ""
 	var welcome := {"t": "s_welcome", "me": me, "req_in": in_req, "req_out": out_req, "friends": friend_cards,
 		"following": following_cards, "server_time": now_unix, "stored": store != null and store.writable}
+	if plox != null:
+		plox.welcome_extra(uid, is_new_account, welcome)
 	if bool(msg.get("sync", false)):
 		# A phone that just logged in gets its recent chats back.
 		# Newest chats first, within a size budget so the welcome stays one small message.
@@ -511,6 +522,8 @@ func handle(cid: int, msg: Dictionary, now_unix: int) -> String:
 	var rid = msg.get("rid", 0)
 	if not (rid is float or rid is int):
 		rid = 0
+	if plox != null and plox.owns(str(msg.t)):
+		return plox.handle(cid, me, msg, rid, now_unix)
 	match msg.t:
 		"s_profile":
 			var u: Dictionary = users[me]
@@ -652,6 +665,11 @@ func handle(cid: int, msg: Dictionary, now_unix: int) -> String:
 			var text := clean_text(msg.get("text"), MAX_TEXT, true)
 			if not valid_uid(to) or not (mid is String) or mid.length() < 8 or mid.length() > 40 or text == "":
 				return "bad_msg"
+			if plox != null:
+				if not plox.cfg.b("f_chat"):
+					_send.call(cid, {"t": "s_ack", "mid": mid, "to": to, "state": "chat_off"})
+					return ""
+				text = plox.filter_text(text)
 			if not friends.get(me, {}).has(to):
 				_send.call(cid, {"t": "s_ack", "mid": mid, "to": to, "state": "not_friends"})
 				return ""

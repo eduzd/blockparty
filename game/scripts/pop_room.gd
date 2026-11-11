@@ -13,6 +13,10 @@ var scores := {}        # id -> knockouts this round
 var names := {}         # id -> name (for results after someone leaves)
 var meta := {}          # id -> {hits, last_by, last_at, shield_until, bonk_at}
 var phase := "play"     # play | results
+## 0.6.0: round length from the live config (0 = the default), and a hook the
+## referee uses to pay Plux when a round ends: (scores {id: kos}, human ids).
+var round_len_s := 0.0
+var on_round_end: Callable
 var phase_end_ms := 0
 var round_no := 1
 var want_bots := 0      # how many bots the room keeps around (from the host's choice)
@@ -252,11 +256,13 @@ func tick(delta: float, now_ms: int) -> void:
 		if phase == "play":
 			phase = "results"
 			phase_end_ms = now_ms + int(PopRules.RESULTS_S * 1000.0)
+			if on_round_end.is_valid():
+				on_round_end.call(scores.duplicate(), humans.keys())
 			broadcast.call({"t": "round", "r": round_info(now_ms), "sc": score_list(), "names": _names_for_scores()})
 		else:
 			phase = "play"
 			round_no += 1
-			phase_end_ms = now_ms + int(round_s() * 1000.0)
+			phase_end_ms = now_ms + int((round_len_s if round_len_s >= 10.0 and not OS.has_environment("POP_ROUND_S") else round_s()) * 1000.0)
 			for id in scores:
 				scores[id] = 0
 			for id in meta:

@@ -4,40 +4,44 @@ extends RefCounted
 ## Units are dp: the project's base viewport is 800x360 (a landscape phone).
 
 # Palette (section 12.2)
-const SKY := Color("#37B1FF")
-const SKY_MEDIUM := Color("#009CFF")
-const SKY_LIGHT := Color("#AFE0FF")
-const SKY_EXTRA_LIGHT := Color("#E3F4FF")
-const INK := Color("#202936")
-const PINK := Color("#FF4BB7")
-const SUCCESS := Color("#00BB77")
-const ERROR := Color("#DA2F2F")
+# Colour palette modelled on the current Roblox app (Roblox "Foundation" design tokens,
+# read from roblox.com's public FoundationCss stylesheet). Only colours changed: the Sky & Ink
+# layout, type, shapes, spacing and icons stay. Constant names are kept so every screen follows.
+const SKY := Color("#528BFF")          # blue-600 (link blue in dark mode)
+const SKY_MEDIUM := Color("#335FFF")   # blue-700: Roblox emphasis / primary button blue
+const BLUE_DEEP := Color("#1446FF")    # blue-800 (link blue in light mode)
+const SKY_LIGHT := Color("#ADC9FF")    # blue-300
+const SKY_EXTRA_LIGHT := Color("#EBF1FF")  # blue-100
+const INK := Color("#202227")          # gray-1000: light-mode emphasis text
+const PINK := Color("#E74E90")         # pink-700 accent
+const SUCCESS := Color("#0C9B5A")      # green-700 (readable with white text)
+const ERROR := Color("#DF281F")        # red-800: system alert
 const AMBER := Color("#F29A2E")
-const ON_SKY_DARK := Color("#00121F")
+const ON_SKY_DARK := Color("#FFFFFF")
 
 static var dark := false
 
 static var LIGHT := {
 	"primary": SKY_MEDIUM, "on_primary": Color.WHITE, "primary_container": SKY_EXTRA_LIGHT,
-	"on_primary_container": INK, "secondary": PINK, "tertiary": SUCCESS, "error": ERROR,
-	"background": Color("#FFFFFF"), "on_background": Color.BLACK, "surface": Color("#FFFFFF"),
-	"on_surface": Color.BLACK, "surface_variant": Color("#ECECEC"), "on_surface_variant": Color("#545454"),
-	"surface_container_low": Color("#F9F9F9"), "surface_container": Color.WHITE,
-	"surface_container_high": Color("#F5F5F5"), "surface_container_highest": Color("#ECECEC"),
-	"inverse_surface": INK, "inverse_on_surface": Color.WHITE, "outline": Color("#CFCFCF"),
-	"outline_variant": Color("#E6E6E6"), "button": INK, "on_button": Color.WHITE,
-	"outline_button_border": Color.BLACK,
+	"on_primary_container": Color("#00145C"), "secondary": PINK, "tertiary": SUCCESS, "error": ERROR,
+	"background": Color("#FFFFFF"), "on_background": INK, "surface": Color("#FFFFFF"),
+	"on_surface": INK, "surface_variant": Color("#EEEFF1"), "on_surface_variant": Color("#494D5A"),
+	"surface_container_low": Color("#F7F7F8"), "surface_container": Color.WHITE,
+	"surface_container_high": Color("#F7F7F8"), "surface_container_highest": Color("#EEEFF1"),
+	"inverse_surface": INK, "inverse_on_surface": Color("#F7F7F8"), "outline": Color("#D5D7DD"),
+	"outline_variant": Color("#E6E7EA"), "button": SKY_MEDIUM, "on_button": Color.WHITE,
+	"outline_button_border": Color("#BCBEC8"),
 }
 static var DARK := {
-	"primary": SKY, "on_primary": ON_SKY_DARK, "primary_container": Color("#0B3550"),
-	"on_primary_container": SKY_EXTRA_LIGHT, "secondary": PINK, "tertiary": SUCCESS, "error": Color("#FF6B6B"),
-	"background": Color("#0E131A"), "on_background": Color("#F4F6F9"), "surface": Color("#0E131A"),
-	"on_surface": Color("#F4F6F9"), "surface_variant": INK, "on_surface_variant": Color("#A7B0BE"),
-	"surface_container_low": Color("#121820"), "surface_container": Color("#18202B"),
-	"surface_container_high": INK, "surface_container_highest": Color("#2A3443"),
-	"inverse_surface": Color("#FFFFFF"), "inverse_on_surface": INK, "outline": Color("#3A4556"),
-	"outline_variant": Color("#263040"), "button": SKY, "on_button": ON_SKY_DARK,
-	"outline_button_border": Color("#3A4556"),
+	"primary": SKY_MEDIUM, "on_primary": Color.WHITE, "primary_container": Color("#1F3173"),
+	"on_primary_container": SKY_EXTRA_LIGHT, "secondary": PINK, "tertiary": Color("#39C582"), "error": Color("#F04433"),
+	"background": Color("#121215"), "on_background": Color("#F7F7F8"), "surface": Color("#121215"),
+	"on_surface": Color("#F7F7F8"), "surface_variant": Color("#272930"), "on_surface_variant": Color("#BCBEC8"),
+	"surface_container_low": Color("#191A1F"), "surface_container": Color("#202227"),
+	"surface_container_high": Color("#272930"), "surface_container_highest": Color("#353741"),
+	"inverse_surface": Color("#F7F7F8"), "inverse_on_surface": INK, "outline": Color("#353741"),
+	"outline_variant": Color("#272930"), "button": SKY_MEDIUM, "on_button": Color.WHITE,
+	"outline_button_border": Color("#494D5A"),
 }
 
 # Typography (section 12.3): [family, size, weight, letter spacing px]
@@ -342,8 +346,8 @@ static func hero_card(title: String, sub: String, icon_name: String, cb: Callabl
 	var col := vbox(4)
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	col.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	col.add_child(label(title, "title_large", INK))
-	col.add_child(label(sub, "body_medium", Color(INK, 0.8)))
+	col.add_child(label(title, "title_large", Color.WHITE))
+	col.add_child(label(sub, "body_medium", Color(1, 1, 1, 0.9)))
 	h.add_child(col)
 	var ink_box := PanelContainer.new()
 	ink_box.custom_minimum_size = Vector2(64, 64)
@@ -758,11 +762,11 @@ static func empty_state(icon_name: String, title: String, sub: String, action: C
 
 
 ## Avatar with a presence dot (success green with a background-coloured ring).
-static func avatar_presence(size: float, name: String, online: bool, av: int = -1) -> Control:
+static func avatar_presence(size: float, name: String, online: bool, av: int = -1, eq: Array = []) -> Control:
 	var wrap := Control.new()
 	wrap.custom_minimum_size = Vector2(size, size)
 	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var art := avatar(size, name, av)
+	var art: Control = ItemArt.dressed(size, name, av, eq) if not eq.is_empty() else avatar(size, name, av)
 	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	wrap.add_child(art)
 	if online:
@@ -778,12 +782,12 @@ static func avatar_presence(size: float, name: String, online: bool, av: int = -
 
 ## Person row inside a card: avatar (with presence), name (titleMedium), sub line,
 ## optional trailing controls. The whole row taps unless cb is empty.
-static func person_row(name: String, sub: String, online: bool, cb: Callable, trailing: Array = [], sub_color: Color = Color(0, 0, 0, 0), av: int = -1) -> Control:
+static func person_row(name: String, sub: String, online: bool, cb: Callable, trailing: Array = [], sub_color: Color = Color(0, 0, 0, 0), av: int = -1, eq: Array = []) -> Control:
 	var row := TapRow.new()
 	row.on_tap = cb
 	var h := hbox(14)
 	h.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	h.add_child(avatar_presence(44, name, online, av))
+	h.add_child(avatar_presence(44, name, online, av, eq))
 	var col := vbox(0)
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -817,12 +821,12 @@ static func small_button(text: String, filled: bool, cb: Callable, icon_name := 
 
 ## Profile header (16/10 margin, 24dp corners, surfaceContainer, 16dp padding, 72dp
 ## avatar, name titleLarge, @username primary). `actions` sit full width below.
-static func profile_header(name: String, username: String, bio: String, online: bool, actions: Array, note := "", av: int = -1) -> Control:
+static func profile_header(name: String, username: String, bio: String, online: bool, actions: Array, note := "", av: int = -1, eq: Array = []) -> Control:
 	var p := PanelContainer.new()
 	p.add_theme_stylebox_override("panel", pad(box(c("surface_container"), 24, c("outline_variant"), 1), 16, 16))
 	var col := vbox(0)
 	var h := hbox(14)
-	h.add_child(avatar_presence(72, name, online, av))
+	h.add_child(avatar_presence(72, name, online, av, eq))
 	var tc := vbox(2)
 	tc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tc.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -968,7 +972,7 @@ class GradientShape extends Control:
 	func _draw() -> void:
 		draw_gradient_rect(self, Rect2(Vector2.ZERO, size), radius)
 
-	static func draw_gradient_rect(ci: CanvasItem, rect: Rect2, r: float, from: Color = UiKit.SKY, to: Color = UiKit.SKY_MEDIUM) -> void:
+	static func draw_gradient_rect(ci: CanvasItem, rect: Rect2, r: float, from: Color = UiKit.SKY_MEDIUM, to: Color = UiKit.BLUE_DEEP) -> void:
 		r = minf(r, minf(rect.size.x, rect.size.y) / 2.0)
 		var pts := PackedVector2Array()
 		var corners := [

@@ -2,7 +2,7 @@ class_name SocialClient
 extends Node
 ## The phone side of the social layer: this phone's account, friends, follows,
 ## friend requests and chats, kept in user://social.json and synced with the
-## Block Party server over its own WebSocket while the app is open.
+## Plux server over its own WebSocket while the app is open.
 
 signal changed                                   # anything in `data` changed
 signal state_changed(state: String)              # offline / connecting / online / elsewhere
@@ -17,6 +17,20 @@ signal typing(uid: String)
 signal login_done(ok: bool, why: String)        # after login(): ok, or why it failed
 signal password_saved(ok: bool, why: String)
 signal account_switched                         # logged in, logged out or the login expired
+# 0.6.0 Plox
+signal cfg_changed                              # live settings from the server changed
+signal eco_changed                              # Plux, inventory, equipped items or shop changed
+signal plux_earned(amount: int, why: String)
+signal reply(t: String, msg: Dictionary)         # Studio, games, AI and shop answers
+signal banned(text: String)
+
+## App version code (export_presets version/code). The server can ask older apps to update.
+const APP_VERSION := 7
+var cfg := LiveConfig.DEFAULTS.duplicate(true)
+var eco := {"coins": 0, "eq": [], "inv": [], "daily_ready": false, "daily": 0}
+var shop: Array = []
+var shop_by_id := {}
+var pop_ticket := ""
 
 const STORE_PATH := "user://social.json"
 const PING_EVERY_MS := 5000
@@ -410,8 +424,84 @@ func _merge_chats(chats: Dictionary) -> void:
 
 func _on_msg(msg: Dictionary) -> void:
 	match msg.t:
+		"s_cfg":
+			if msg.get("cfg") is Dictionary:
+				cfg.merge(msg.cfg, true)
+				cfg_changed.emit()
+		"s_eco_res":
+			if msg.get("cfg") is Dictionary:
+				cfg.merge(msg.cfg, true)
+			if msg.get("eco") is Dictionary:
+				eco = msg.eco
+			if msg.get("shop") is Array:
+				shop = msg.shop
+				shop_by_id.clear()
+				for it in shop:
+					if it is Dictionary:
+						shop_by_id[str(it.get("id", ""))] = it
+			eco_changed.emit()
+		"s_plux":
+			eco.coins = int(msg.get("coins", eco.coins))
+			plux_earned.emit(int(msg.get("got", 0)), str(msg.get("why", "")))
+			eco_changed.emit()
+		"s_look":
+			var w := str(msg.get("uid", ""))
+			if data.cards.has(w):
+				data.cards[w]["eq"] = msg.get("eq", [])
+			if data.friends.has(w):
+				data.friends[w]["eq"] = msg.get("eq", [])
+			_touch()
+		"s_playing":
+			var w := str(msg.get("uid", ""))
+			for d in [data.cards, data.friends]:
+				if d.has(w):
+					if msg.get("playing") is Dictionary and not msg.playing.is_empty():
+						d[w]["playing"] = msg.playing
+					else:
+						d[w].erase("playing")
+			_touch()
+		"s_daily_res", "s_buy_res", "s_equip_res":
+			if msg.has("coins"):
+				eco.coins = int(msg.coins)
+			if msg.t == "s_buy_res" and bool(msg.get("ok", false)):
+				eco.inv.append({"oid": msg.get("oid", ""), "item": msg.get("item", ""), "serial": int(msg.get("serial", 0))})
+				if shop_by_id.has(str(msg.get("item", ""))) and shop_by_id[msg.item].has("left"):
+					shop_by_id[msg.item].left = maxi(0, int(shop_by_id[msg.item].left) - 1)
+			if msg.t == "s_daily_res":
+				eco.daily_ready = false
+				if bool(msg.get("ok", false)):
+					plux_earned.emit(int(msg.get("got", 0)), "daily")
+			if msg.t == "s_equip_res" and msg.get("eq") is Array:
+				eco.eq = msg.eq
+				var me_eq := []
+				for id in msg.eq:
+					if shop_by_id.has(id):
+						me_eq.append({"art": shop_by_id[id].art, "col": shop_by_id[id].col, "slot": shop_by_id[id].slot})
+				data.me["eq"] = me_eq
+			eco_changed.emit()
+			reply.emit(str(msg.t), msg)
+		"s_ticket_res":
+			pop_ticket = str(msg.get("ticket", ""))
+		"s_studio_mine_res", "s_game_res", "s_studio_save_res", "s_studio_delete_res", "s_games_res", \
+				"s_game_like_res", "s_ai_res", "s_report_res":
+			if msg.t == "s_studio_save_res" and msg.has("coins"):
+				eco.coins = int(msg.coins)
+				plux_earned.emit(int(msg.get("got", 0)), "publish")
+				eco_changed.emit()
+			reply.emit(str(msg.t), msg)
+		"error":
+			if str(msg.get("code", "")) == "banned":
+				banned.emit(str(msg.get("msg", "This account is banned.")))
 		"s_welcome":
+			if msg.get("cfg") is Dictionary:
+				cfg.merge(msg.cfg, true)
+				cfg_changed.emit()
+			if msg.get("eco") is Dictionary:
+				eco = msg.eco
+				eco_changed.emit()
 			_welcomed = true
+			request({"t": "s_eco"})
+			request({"t": "s_ticket"})
 			_backoff = 1.0
 			var me: Dictionary = msg.get("me", {})
 			data.me = me
@@ -601,6 +691,38 @@ func _resend_outbox() -> void:
 
 
 # ------------------------------------------------------------------ actions
+
+# ------------------------------------------------------------------ Plox (0.6.0)
+
+## Sends any Plox request; the answer comes back on the `reply` signal.
+func request(msg: Dictionary) -> bool:
+	msg["rid"] = _next_rid()
+	return _send(msg)
+
+
+func feature(name: String) -> bool:
+	return bool(cfg.get("f_" + name, true))
+
+
+func owns_item(id: String) -> bool:
+	for o in eco.get("inv", []):
+		if str(o.get("item", "")) == id:
+			return true
+	return false
+
+
+func equipped_cards() -> Array:
+	var out := []
+	for id in eco.get("eq", []):
+		if shop_by_id.has(id):
+			var it: Dictionary = shop_by_id[id]
+			out.append({"art": it.art, "col": it.col, "slot": it.slot})
+	return out
+
+
+func set_playing(what: String) -> void:
+	_send({"t": "s_playing", "what": what})
+
 
 func search(q: String) -> void:
 	_search_rid = _next_rid()

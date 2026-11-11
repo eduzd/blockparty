@@ -27,6 +27,10 @@ var _next_id := 1
 var _snap_accum := 0.0
 ## Profiles, friends, follows and chat (see SocialHub). Same port as the game.
 var social: SocialHub
+var plox: PloxHub
+var _bytes_out := 0
+var _bytes_in := 0
+var _bytes_at := 0
 ## Permanent storage for the social layer, when NEON_DATABASE_URL is set (Render).
 var store: NeonStore
 var _store_wait_since := 0
@@ -37,6 +41,10 @@ func start(p_port: int, bind_address: String = "*") -> Error:
 	social = SocialHub.new(func(cid: int, data: Dictionary):
 		if _clients.has(cid):
 			_send(_clients[cid], data), _log)
+	plox = PloxHub.new(social)
+	plox.referee = self
+	add_child(plox)
+	social.plox = plox
 	if OS.has_environment("NEON_DATABASE_URL") and OS.get_environment("NEON_DATABASE_URL") != "":
 		store = NeonStore.new()
 		add_child(store)
@@ -44,6 +52,7 @@ func start(p_port: int, bind_address: String = "*") -> Error:
 			social.attach_store(store)
 			store.loaded.connect(func(data: Dictionary):
 				social.load_from(data)
+				plox.load_from(data.get("plox", {}))
 				_release_held())
 			_store_wait_since = Time.get_ticks_msec()
 			store.start_load()
@@ -92,6 +101,12 @@ func _process(delta: float) -> void:
 	if not _tcp.is_listening():
 		return
 	var now := Time.get_ticks_msec()
+	if now - _bytes_at > 2000 and plox:
+		_bytes_at = now
+		# Rough bandwidth count for the admin app (WebSocket payloads plus ~6 bytes of framing).
+		plox.note_bytes(_bytes_out, _bytes_in)
+		_bytes_out = 0
+		_bytes_in = 0
 	_accept_new(now)
 	_poll_pending(now)
 	_poll_clients(now)
@@ -173,10 +188,11 @@ func _poll_clients(now: int) -> void:
 			continue
 		while _clients.has(id) and ws.get_available_packet_count() > 0:
 			var pkt := ws.get_packet()
+			_bytes_in += pkt.size() + 6
 			_handle_packet(c, pkt, ws.was_string_packet(), now)
 		if not _clients.has(id):
 			continue
-		if c.room == "" and not bool(c.get("social", false)) and not c.has("held") \
+		if c.room == "" and not bool(c.get("social", false)) and not c.has("held") and not bool(c.get("admin", false)) \
 				and now - int(c.joined_at) > Protocol.HELLO_TIMEOUT_MS:
 			_kick(id, "hello_timeout", "No hello received")
 		elif now - int(c.last_msg) > Protocol.IDLE_TIMEOUT_MS:
@@ -202,25 +218,39 @@ func _handle_packet(c: Dictionary, pkt: PackedByteArray, is_text: bool, now: int
 		return
 	var is_signal: bool = msg.t == "vsig"
 	var is_social := SocialHub.is_social(msg.t)
-	if pkt.size() > Protocol.MAX_MESSAGE_BYTES and not is_signal and not is_social:
+	if pkt.size() > Protocol.MAX_MESSAGE_BYTES and not is_signal and not is_social and not str(msg.t).begins_with("a_"):
 		_kick(id, "too_big", "Message too large")
 		return
-	# Rate limits: game messages and voice signalling are counted separately.
-	if now - int(c.win_start) >= 1000:
-		c.win_start = now
-		c.win_count = 0
-		c.sig_count = 0
-	if is_signal:
-		c.sig_count = int(c.get("sig_count", 0)) + 1
-		if c.sig_count > Protocol.MAX_SIGNALS_PER_SEC:
-			_kick(id, "rate_limit", "Too many messages")
-			return
-	else:
-		c.win_count += 1
-		if c.win_count > Protocol.MAX_MSGS_PER_SEC:
-			_kick(id, "rate_limit", "Too many messages")
-			return
+	# Rate limits (0.6.0): token buckets refilled by the clock, not by how often
+	# we got round to reading. When the server falls behind, or a phone's
+	# connection freezes and then catches up, a backlog arrives at once: we
+	# drop what is over the limit instead of kicking. Only a client that keeps
+	# sending far over the limit for several seconds is kicked.
+	var over := not _take_token(c, "sig" if is_signal else "msg", now,
+		Protocol.MAX_SIGNALS_PER_SEC if is_signal else Protocol.MAX_MSGS_PER_SEC)
 	c.last_msg = now
+	if over:
+		c.dropped = int(c.get("dropped", 0)) + 1
+		if now - int(c.get("drop_since", 0)) > Protocol.FLOOD_WINDOW_MS:
+			c.drop_since = now
+			c.dropped = 1
+		elif int(c.dropped) > Protocol.FLOOD_KICK_DROPS:
+			_kick(id, "rate_limit", "Too many messages")
+			return
+		# Movement is sent 20 times a second, so a newer one is always coming:
+		# drop it. Anything else (a chat message, a purchase) still goes through.
+		if msg.t == "state":
+			return
+	if plox.is_admin_type(str(msg.t)):
+		# Admin app: never a player connection. The password is checked by PloxHub.
+		if c.room != "" or bool(c.get("social", false)):
+			_bad(c, "not_admin")
+			return
+		c.admin = true
+		var aerr := plox.admin_handle(c.id, msg, func(d: Dictionary): _send(c, d))
+		if aerr != "":
+			_bad(c, aerr)
+		return
 	if is_social:
 		_on_social(c, msg)
 		return
@@ -589,7 +619,14 @@ func _on_pop_hello(c: Dictionary, msg: Dictionary, code: String, now: int) -> vo
 			_next_id += 1
 			return nid
 		var nb = Protocol.parse_number(msg.get("bots"))
-		pr.want_bots = clampi(int(nb) if nb != null else 3, 0, PopRules.MAX_BOTS)
+		pr.want_bots = clampi(int(nb) if nb != null else 3, 0, mini(PopRules.MAX_BOTS, plox.cfg.i("pop_max_bots")))
+		pr.round_len_s = float(plox.cfg.i("pop_round_s"))
+		pr.on_round_end = func(scores: Dictionary, human_ids: Array):
+			var uids := {}
+			for hid in human_ids:
+				if _clients.has(hid):
+					uids[hid] = str(_clients[hid].get("uid", ""))
+			plox.on_pop_round(scores, uids)
 		_pop[key] = pr
 	var used := {}
 	for other_id in members:
@@ -599,6 +636,7 @@ func _on_pop_hello(c: Dictionary, msg: Dictionary, code: String, now: int) -> vo
 		color += 1
 	var ch = Protocol.parse_number(msg.get("ch"))
 	c.name = Protocol.sanitize_name(msg.get("name"))
+	c.uid = plox.ticket_uid(msg.get("tk"))   # who to pay Plux to (empty = guest)
 	c.room = key
 	c.color = color
 	c.ch = clampi(int(ch) if ch != null else color, 0, PopRules.CHARACTERS.size() - 1)
@@ -678,6 +716,23 @@ func _bad(c: Dictionary, code: String) -> void:
 		_send(c, {"t": "error", "code": code})
 
 
+## Token bucket per client and kind. Refills at `rate` per second of real time
+## and holds a few seconds' worth, so bursts after a lag are absorbed.
+func _take_token(c: Dictionary, kind: String, now: int, rate: int) -> bool:
+	var tk := "tok_" + kind
+	var tt := "tok_at_" + kind
+	var cap := float(rate) * Protocol.RATE_BURST_SECONDS
+	var tokens: float = float(c.get(tk, cap))
+	var at: int = int(c.get(tt, now))
+	tokens = minf(cap, tokens + float(now - at) * float(rate) / 1000.0)
+	c[tt] = now
+	if tokens >= 1.0:
+		c[tk] = tokens - 1.0
+		return true
+	c[tk] = tokens
+	return false
+
+
 func _kick(id: int, code: String, text: String) -> void:
 	if not _clients.has(id):
 		return
@@ -693,6 +748,8 @@ func _remove(id: int, reason: String) -> void:
 		return
 	var c: Dictionary = _clients[id]
 	_clients.erase(id)
+	if plox:
+		plox.admin_drop(id)
 	if bool(c.get("social", false)) and social:
 		social.on_disconnect(id, int(Time.get_unix_time_from_system()))
 	if c.room != "" and _rooms.has(c.room):
@@ -718,13 +775,32 @@ func _remove(id: int, reason: String) -> void:
 func _send(c: Dictionary, data: Dictionary) -> void:
 	var ws: WebSocketPeer = c.ws
 	if ws.get_ready_state() == WebSocketPeer.STATE_OPEN:
-		ws.send_text(Protocol.encode(data))
+		var text := Protocol.encode(data)
+		_bytes_out += text.length()
+		ws.send_text(text)
+
+
+## For the admin app's live stats.
+func room_stats() -> Dictionary:
+	var in_games := 0
+	for r in _rooms.values():
+		in_games += r.size()
+	return {"connections": _clients.size(), "rooms": _rooms.size(), "pop_rooms": _pop.size(), "in_games": in_games}
+
+
+func drop_client(id: int) -> void:
+	if _clients.has(id):
+		var c: Dictionary = _clients[id]
+		c.ws.close(4000, "banned")
+		_closing.append({"ws": c.ws, "since": Time.get_ticks_msec()})
+		_remove(id, "banned")
 
 
 func _broadcast(room: String, data: Dictionary, except_id: int) -> void:
 	if not _rooms.has(room):
 		return
 	var text := Protocol.encode(data)
+	_bytes_out += (text.length() + 6) * _rooms[room].size()
 	for id in _rooms[room]:
 		if id == except_id:
 			continue

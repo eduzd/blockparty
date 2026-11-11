@@ -71,7 +71,7 @@ func start_load() -> void:
 	if not enabled or _mode != "":
 		return
 	var qs := []
-	for s in SCHEMA:
+	for s in SCHEMA + PloxHub.SCHEMA:
 		qs.append({"query": s, "params": []})
 	qs.append({"query": "select uid, name, username, bio, av, last_seen, pw from bp_users", "params": []})
 	qs.append({"query": "select a, b from bp_follows", "params": []})
@@ -80,6 +80,8 @@ func start_load() -> void:
 	# Undelivered messages always, plus the latest history (newest first, capped).
 	qs.append({"query": "select mid, from_uid, to_uid, text, ts, delivered from bp_msgs where delivered = false or mid in (select mid from bp_msgs order by ts desc limit 20000) order by ts asc", "params": []})
 	qs.append({"query": "select th, uid from bp_sessions", "params": []})
+	for l in PloxHub.LOADS:
+		qs.append({"query": l[1], "params": []})
 	_inflight = qs
 	_mode = "load"
 	_post(qs)
@@ -149,8 +151,8 @@ func _on_done(result: int, code: int, _headers: PackedStringArray, body: PackedB
 	_backoff = 1.0
 	if mode == "load":
 		var results: Array = parsed.get("results", []) if parsed is Dictionary else []
-		var n := SCHEMA.size()
-		if results.size() < n + 6:
+		var n := SCHEMA.size() + PloxHub.SCHEMA.size()
+		if results.size() < n + 6 + PloxHub.LOADS.size():
 			_log.call("storage: unexpected load reply")
 			_retry_at = Time.get_ticks_msec() + 5000
 			return
@@ -159,6 +161,10 @@ func _on_done(result: int, code: int, _headers: PackedStringArray, body: PackedB
 			"friends": results[n + 2].get("rows", []), "requests": results[n + 3].get("rows", []),
 			"msgs": results[n + 4].get("rows", []), "sessions": results[n + 5].get("rows", []),
 		}
+		var plox := {}
+		for k in PloxHub.LOADS.size():
+			plox[PloxHub.LOADS[k][0]] = results[n + 6 + k].get("rows", [])
+		data["plox"] = plox
 		is_loaded = true
 		writable = true
 		_log.call("storage: loaded %d accounts, %d messages" % [data.users.size(), data.msgs.size()])

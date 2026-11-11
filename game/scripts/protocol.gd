@@ -4,6 +4,7 @@ extends RefCounted
 ## The server only trusts what passes these checks.
 
 const VERSION := 1
+const SERVER_VERSION := "0.6.0"
 const DEFAULT_PORT := 8910
 const DEFAULT_ROOM := "PLAY"
 
@@ -17,6 +18,12 @@ const MAX_SDP_CHARS := 7000
 const MAX_ICE_CHARS := 600
 const MAX_MSGS_PER_SEC := 40
 const MAX_BAD_MESSAGES := 20
+## 0.6.0: bursts up to this many seconds' worth of messages are fine (a backlog
+## after lag). Beyond that extra messages are dropped, and a client is kicked only
+## after dropping this many within the window (sustained flooding, not lag).
+const RATE_BURST_SECONDS := 4.0
+const FLOOD_WINDOW_MS := 10000
+const FLOOD_KICK_DROPS := 400
 const HELLO_TIMEOUT_MS := 5000
 const IDLE_TIMEOUT_MS := 15000
 const SNAPSHOT_HZ := 20

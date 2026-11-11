@@ -113,6 +113,10 @@ func _run_dedicated_server() -> void:
 	var port := Protocol.DEFAULT_PORT
 	if OS.has_environment("PORT"):
 		port = int(OS.get_environment("PORT"))
+	# 0.6.0: the server only needs ~60 loops a second (balls step at 30 Hz,
+	# snapshots go out at 20 Hz). Uncapped it spun ~145 times a second on a
+	# tiny slice of CPU, which left less for the rooms themselves.
+	Engine.max_fps = 60
 	host_server = RefereeServer.new()
 	add_child(host_server)
 	if host_server.start(port, "*") != OK:
@@ -365,6 +369,12 @@ func _connect(url: String) -> void:
 			room = "SOLO"
 			bots = maxi(bots, 1)
 		extra = {"g": "pop", "ch": int(settings.get_value("p", "pop_ch", 0)), "bots": bots}
+		# 0.6.0: a one-use ticket tells the server which account to pay Plux to.
+		if social and social.pop_ticket != "" and mode == "online":
+			extra["tk"] = social.pop_ticket
+			social.pop_ticket = ""
+	if social:
+		social.set_playing(game if game in ["pop", "neon"] else "neon")
 	net.join(url, _player_name(), room, extra)
 
 
@@ -617,6 +627,9 @@ func _on_jump() -> void:
 func _leave_game() -> void:
 	voice.shutdown()
 	net.leave()
+	if social:
+		social.set_playing("")
+		social.request({"t": "s_ticket"})   # fresh ticket for the next round
 	if host_server:
 		host_server.stop()
 		host_server.queue_free()
@@ -1082,6 +1095,8 @@ func _autotest_social_setup() -> void:
 		"password": shell.select_tab(3); shell.push({"k": "settings"}); shell.push({"k": "password"})
 		"login": shell.select_tab(3); shell.push({"k": "settings"}); shell.push({"k": "login"})
 		"list": shell.push({"k": "list", "uid": social.uid, "kind": "friends"})
+		"shop": shell.push({"k": "shop"})
+		"item": shell.push({"k": "item", "id": scr.get_slice(":", 1)})
 		"user": shell.push({"k": "user", "uid": scr.get_slice(":", 1)})
 		"chat_with": shell.select_tab(2); shell.push({"k": "chat", "uid": scr.get_slice(":", 1)})
 		"firstfriend":
