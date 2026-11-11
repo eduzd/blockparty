@@ -23,8 +23,12 @@ function user(acct) {
       if (m.t === 's_msg' && !acct.noGot) ws.send(JSON.stringify({ t: 's_got', mid: m.mid }));
       if (m.t === 's_welcome') { c.welcome = m; resolve(c); }
     });
-    ws.on('open', () => ws.send(JSON.stringify(Object.assign({ t: 's_hello', v: 1 }, acct))));
-    ws.on('close', () => { c.closed = true; });
+    ws.on('open', () => {
+      ws.send(JSON.stringify(Object.assign({ t: 's_hello', v: 1 }, acct)));
+      // Like the app: a ping every 5 s keeps an idle social connection open.
+      c.pinger = setInterval(() => { if (ws.readyState === 1) ws.send(JSON.stringify({ t: 'ping', c: 1 })); }, 5000);
+    });
+    ws.on('close', () => { c.closed = true; clearInterval(c.pinger); });
     ws.on('error', reject);
     setTimeout(() => reject(new Error('no welcome for ' + acct.name)), 70000);
   });
