@@ -213,6 +213,10 @@ func back() -> bool:
 
 
 func _show_current(animate: bool, direction := 0) -> void:
+	# The welcome screen (sign up / log in) is up: nothing to show yet. The shell is rebuilt
+	# with the current tab and stack once the player is in.
+	if _welcome != null or not is_instance_valid(_page_holder) or not is_instance_valid(_screen_holder) or _page_holder.is_queued_for_deletion():
+		return
 	social.close_chat()
 	_chat_uid = ""
 	_kb_spacer = null
