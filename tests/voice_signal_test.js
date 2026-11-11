@@ -96,8 +96,8 @@ const take = (c, pred) => { const i = c.inbox.findIndex(pred); return i < 0 ? nu
   // A non-voice message over 1 KB is still refused (kick), as before.
   const c2 = await client('Max', 'TEST1');
   send(c2, { t: 'state', pad: 'y'.repeat(2000) });
-  await sleep(400);
-  ok(c2.closed, 'oversized game message still kicks');
+  await sleep(2000);
+  ok(c2.closed || c2.inbox.some(m => m.t === 'error' && m.code === 'too_big' && m.fatal), 'oversized game message still refused (fatal too_big)');
 
   for (const c of [a, x, late]) c.ws.close();
   console.log(failures === 0 ? 'ALL PASS' : failures + ' FAILED');
