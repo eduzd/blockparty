@@ -47,7 +47,7 @@ async function ask(c, m, t, ms = 60000) { const r = rid++; c.ws.send(JSON.string
   b = await ask(pl, { t: 's_ai_build', prompt: 'a lava obby with hammers' }, 's_ai_res', 120000);
   ok(b && b.ok && b.source === 'ai' && b.level && b.level.parts.length > 3, 'unfinishable level gets fixed by the AI (' + (b && (b.why || '')) + ')');
   const g2 = await ask(ad, { t: 'a_ai_get' }, 'a_ai_res');
-  ok(g2 && g2.log && g2.log.some(e => /fixed 1x/.test(e.why)), 'usage log shows the fix: ' + JSON.stringify(g2 && g2.log && g2.log[0]));
+  ok(g2 && g2.log && g2.log.some(e => /fixed \dx/.test(e.why)), 'usage log shows the fix: ' + JSON.stringify(g2 && g2.log && g2.log[0]));
   console.log(`${passes} passed, ${fails} failed`);
   process.exit(fails ? 1 : 0);
 })();

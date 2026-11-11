@@ -125,3 +125,19 @@ static func enforce_level(level: Dictionary, agent: Dictionary) -> Dictionary:
 			parts.append(p)
 	level["parts"] = parts
 	return level
+
+
+## 0.7.2: {kind: false} for each object the admin switched off.
+static func banned_kinds(agent: Dictionary) -> Dictionary:
+	var opts := clean_opts(agent.get("opts", {}), str(agent.get("id", "")), bool(agent.get("builtin", false)))
+	var out := {}
+	for opt in SCHEMA:
+		if opt.has("kind") and opts.has(opt.key) and not opts[opt.key]:
+			out[opt.kind] = false
+	return out
+
+
+## 0.7.2: the agent's most-objects cap (0 when none).
+static func max_parts_of(agent: Dictionary) -> int:
+	var opts := clean_opts(agent.get("opts", {}), str(agent.get("id", "")), bool(agent.get("builtin", false)))
+	return int(opts.get("max_parts", "0"))

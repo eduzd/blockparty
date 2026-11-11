@@ -334,6 +334,33 @@ static func ai_system_prompt(max_parts: int) -> String:
 const AI_RETRY_NOTE := "Your last reply could not be used because it was not a single valid JSON object in the level format. Reply again with ONLY the JSON object: start with { and end with }, no other text, no code fences, no code. Keep the plan short and use at most 60 parts so it fits."
 
 
+## Words in a prompt that ask for a piece.
+const ASKS := {"lava": ["lava", "magma", "fire", "volcano", "molten"], "spinner": ["hammer", "spinner", "spinning", "sweeper", "swing"],
+	"ice": ["ice", "icy", "slippery", "frozen", "snow", "skate"], "bounce": ["jump pad", "bounce", "bouncy", "trampoline", "launch", "spring"],
+	"mover": ["moving", "mover", "elevator", "slide back", "sliding platform"], "coin": ["coin", "star", "collect", "treasure", "gem"],
+	"checkpoint": ["checkpoint", "save point", "respawn"]}
+
+
+## What a good level for this prompt still lacks (too small, a piece they asked for).
+static func quality(level: Dictionary, prompt: String, min_parts: int, allowed := {}) -> Array:
+	var probs := []
+	var parts: Array = level.get("parts", [])
+	if parts.size() < min_parts:
+		probs.append("The level only has %d parts. Build a full course with at least %d parts in 3 to 6 sections, following your plan." % [parts.size(), min_parts])
+	var have := {}
+	for p in parts:
+		have[p[0]] = true
+	var low := prompt.to_lower()
+	for kind in ASKS:
+		if have.has(kind) or (not allowed.is_empty() and not allowed.get(kind, true)):
+			continue
+		for w in ASKS[kind]:
+			if low.contains(w):
+				probs.append("The player asked for \"%s\" but the level has no %s parts. Add %s parts prominently along the route." % [w, kind, kind])
+				break
+	return probs
+
+
 ## Sent when the level parsed but can't be finished.
 static func ai_repair_note(problems: Array) -> String:
 	return "I checked your level in the engine and it can't be finished yet:\n- " + "\n- ".join(problems) \

@@ -1084,13 +1084,13 @@ func _ai_call(prompt: String, done: Callable, test := false, override := {}, cha
 		if rules_txt.strip_edges() != "":
 			sys += "\n\nRules from the Plux team for you (%s). Follow them, but always reply in the JSON format above:\n%s" % [str(ag.get("name", "")), rules_txt]
 		messages = [{"role": "system", "content": sys},
-			{"role": "user", "content": "Build this game: " + prompt + "\n\nReply with the level JSON only."}]
+			{"role": "user", "content": "Build this game: " + prompt + "\n\nFollow the Studio Builder instructions: plan first inside the JSON, then at least 20 parts using the pieces that fit my idea. Reply with the level JSON only."}]
 		if not change.is_empty() and change.get("parts", []).size() > 0:
 			messages[1].content = "Here is my current game as JSON:\n" + JSON.stringify({"title": change.title, "sky": change.sky, "spawn": change.spawn, "goal": change.goal, "parts": change.parts}) \
 				+ "\n\nChange it like this: " + prompt \
 				+ "\nChange ONLY what I asked. Keep every other part exactly as it is (same kind, position, size, rotation and colour), keep the title unless I asked to rename it, and keep it finishable. " \
 				+ "In the plan, list just the changes you made. Reply with the whole updated game in the same JSON format, JSON only."
-	var st := {"try": 1, "t0": Time.get_ticks_msec()}
+	var st := {"try": 1, "t0": Time.get_ticks_msec(), "prompt": prompt if not test else "", "edit": not change.is_empty()}
 	_ai_try(url, model, key, messages, test, ag, done, st)
 
 
@@ -1111,6 +1111,17 @@ static func ai_endpoint(base: String) -> String:
 	if not after.contains("/"):
 		b += "/v1"
 	return b + "/chat/completions"
+
+
+## Keeps the last few raw AI replies (never the key) for diagnosing a router.
+var ai_debug_ring: Array = []
+func _ai_debug(model: String, code: int, r: Dictionary, text: String, attempt: int, fixes: int) -> void:
+	ai_debug_ring.push_front({"ts": _now(), "model": model, "code": code, "shape": r.shape, "finish": r.finish,
+		"try": attempt, "fixes": fixes, "len": text.length(), "text_len": str(r.text).length(), "reasoning_len": str(r.reasoning).length(),
+		"head": text.substr(0, 3500), "tail": text.substr(maxi(0, text.length() - 600))})
+	while ai_debug_ring.size() > 8:
+		ai_debug_ring.pop_back()
+	_db("insert into plox_config (k, v) values ('ai_debug', $1) on conflict (k) do update set v = $1", [JSON.stringify(ai_debug_ring)])
 
 
 func _ai_try(url: String, model: String, key: String, messages: Array, test: bool, ag: Dictionary, done: Callable, st: Dictionary) -> void:
@@ -1138,6 +1149,13 @@ func _ai_try(url: String, model: String, key: String, messages: Array, test: boo
 		return true
 	var fail := func(why: String, bad_reply: String, can_retry: bool):
 		if can_retry and retry.call(why, bad_reply):
+			return
+		if st.has("best"):
+			# A fix attempt went wrong, but an earlier answer was a finishable game: use that.
+			var bl: Dictionary = st.best
+			bl["_info"] = "AI, %d parts, kept the earlier version (fix failed: %s)" % [bl.parts.size(), why.substr(0, 80)]
+			print("[ai] fix failed (%s), using the earlier finishable level" % why)
+			done.call(true, bl, "")
 			return
 		var w := why
 		if st.has("first_why") and str(st.first_why) != why:
@@ -1173,6 +1191,7 @@ func _ai_try(url: String, model: String, key: String, messages: Array, test: boo
 			fail.call("HTTP %d: %s" % [code, emsg], "", code == 429 or code >= 500)
 			return
 		var r := PloxAi.reply_text(text)
+		_ai_debug(model, code, r, text, int(st.try), int(st.get("fixes", 0)))
 		var content: String = r.text
 		if content.strip_edges() == "" and str(r.reasoning).strip_edges() != "":
 			content = r.reasoning   # some routers put the whole answer in the reasoning field
@@ -1203,8 +1222,18 @@ func _ai_try(url: String, model: String, key: String, messages: Array, test: boo
 		if level.parts.size() < 3:
 			fail.call("too few usable parts (%d of %d): %s" % [level.parts.size(), raw_n, PloxAi.preview(content, 100)], content, true)
 			return
-		# Check it can really be finished; if not, tell the AI exactly where and let it fix it.
+		# Check it can really be finished and really is what the player asked for;
+		# if not, tell the AI exactly what's wrong and let it fix it.
 		var probs := PloxLevel.playability(level)
+		if probs.is_empty():
+			st["best"] = level.duplicate(true)
+		if probs.is_empty() and str(st.get("prompt", "")) != "" and not st.get("edit", false):
+			var allowed := AgentRules.banned_kinds(ag) if not ag.is_empty() else {}
+			var cap := AgentRules.max_parts_of(ag) if not ag.is_empty() else 0
+			var want := mini(16, cfg.i("studio_max_parts"))
+			if cap > 0:
+				want = mini(want, maxi(6, cap - 4))
+			probs = PloxLevel.quality(level, str(st.prompt), want, allowed)
 		if not probs.is_empty():
 			var fixes := int(st.get("fixes", 0))
 			if fixes < 2:
@@ -1213,10 +1242,15 @@ func _ai_try(url: String, model: String, key: String, messages: Array, test: boo
 				var m3: Array = messages.duplicate(true)
 				m3.append({"role": "assistant", "content": JSON.stringify({"title": level.title, "sky": level.sky, "spawn": level.spawn, "goal": level.goal, "parts": level.parts})})
 				m3.append({"role": "user", "content": PloxLevel.ai_repair_note(probs)})
+				if int(st.try) == 2 and not st.has("first_why"):
+					pass
 				_ai_try(url, model, key, m3, test, ag, done, st)
 				return
-			fail.call("the AI's level still can't be finished after %d fixes: %s" % [fixes, str(probs[0]).substr(0, 220)], "", false)
-			return
+			if PloxLevel.playability(level).is_empty():
+				pass   # finishable, just not perfect: use it
+			else:
+				fail.call("the AI's level still can't be finished after %d fixes: %s" % [fixes, str(probs[0]).substr(0, 220)], "", false)
+				return
 		var info := "AI, %d parts%s%s%s" % [level.parts.size(), ", 2nd try" if int(st.try) > 1 else "",
 			(", fixed %dx" % int(st.fixes)) if int(st.get("fixes", 0)) > 0 else "", ", cut off and closed" if r.finish == "length" else ""]
 		print("[ai] ok in %d ms: %s, '%s'" % [Time.get_ticks_msec() - int(st.t0), info, str(level.title)])
