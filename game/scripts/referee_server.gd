@@ -310,7 +310,7 @@ func _release_held() -> void:
 
 func _on_social(c: Dictionary, msg: Dictionary) -> void:
 	var unix := int(Time.get_unix_time_from_system())
-	if (msg.t == "s_hello" or msg.t == "s_login") and _store_waiting() and not bool(c.get("social", false)):
+	if (msg.t == "s_hello" or msg.t == "s_login" or msg.t == "s_signup" or msg.t == "s_name_check") and _store_waiting() and not bool(c.get("social", false)):
 		# Hold sign-ins until the accounts are loaded from the database.
 		var held: Array = c.get("held", [])
 		if held.size() >= 3:
@@ -331,6 +331,21 @@ func _on_social(c: Dictionary, msg: Dictionary) -> void:
 		if msg.has("rid"):
 			res["rid"] = msg.rid
 		_send(c, res)
+		c.joined_at = Time.get_ticks_msec()
+		return
+	if (msg.t == "s_signup" or msg.t == "s_name_check") and not bool(c.get("social", false)):
+		if c.room != "":
+			_bad(c, "already_joined")
+			return
+		var key := "signup_tries" if msg.t == "s_signup" else "name_tries"
+		c[key] = int(c.get(key, 0)) + 1
+		if c[key] > (5 if msg.t == "s_signup" else 80):
+			_kick(c.id, "rate_limit", "Too many tries")
+			return
+		var res2: Dictionary = social.on_signup(msg, unix) if msg.t == "s_signup" else social.on_name_check(msg)
+		if msg.has("rid"):
+			res2["rid"] = msg.rid
+		_send(c, res2)
 		c.joined_at = Time.get_ticks_msec()
 		return
 	if msg.t == "s_hello":
@@ -450,6 +465,8 @@ func _on_hello(c: Dictionary, msg: Dictionary, now: int) -> void:
 	while used.has(color):
 		color += 1
 	c.name = Protocol.sanitize_name(msg.get("name"))
+	c.uid = plox.ticket_uid(msg.get("tk")) if plox else ""   # 0.7.0: Neon Bounce pays Plux too
+	c.neon_since = now
 	c.room = room
 	c.color = color
 	var angle := TAU * float(members.size()) / Protocol.MAX_PLAYERS_PER_ROOM
@@ -752,6 +769,8 @@ func _remove(id: int, reason: String) -> void:
 		plox.admin_drop(id)
 	if bool(c.get("social", false)) and social:
 		social.on_disconnect(id, int(Time.get_unix_time_from_system()))
+	if plox and c.has("neon_since") and str(c.get("uid", "")) != "":
+		plox.on_neon_left(str(c.uid), int((Time.get_ticks_msec() - int(c.neon_since)) / 1000))
 	if c.room != "" and _rooms.has(c.room):
 		var members: Array = _rooms[c.room]
 		members.erase(id)

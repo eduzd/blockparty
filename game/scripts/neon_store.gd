@@ -33,6 +33,8 @@ var _split_left := 0
 
 const SCHEMA := [
 	"create table if not exists bp_users (uid text primary key, name text not null default 'Player', username text not null default '', bio text not null default '', av int not null default -1, last_seen bigint not null default 0, pw text, created bigint not null default 0)",
+	"alter table bp_users add column if not exists birthday text not null default ''",
+	"alter table bp_users add column if not exists email text not null default ''",
 	"create index if not exists bp_users_username on bp_users (username)",
 	"create table if not exists bp_follows (a text not null, b text not null, primary key (a, b))",
 	"create table if not exists bp_friends (a text not null, b text not null, primary key (a, b))",
@@ -73,7 +75,7 @@ func start_load() -> void:
 	var qs := []
 	for s in SCHEMA + PloxHub.SCHEMA:
 		qs.append({"query": s, "params": []})
-	qs.append({"query": "select uid, name, username, bio, av, last_seen, pw from bp_users", "params": []})
+	qs.append({"query": "select uid, name, username, bio, av, last_seen, pw, created, birthday, email from bp_users", "params": []})
 	qs.append({"query": "select a, b from bp_follows", "params": []})
 	qs.append({"query": "select a, b from bp_friends", "params": []})
 	qs.append({"query": "select to_uid, from_uid from bp_requests", "params": []})

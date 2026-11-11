@@ -240,7 +240,7 @@ func on_hello(cid: int, msg: Dictionary, now_unix: int) -> String:
 
 	var mine := _bucket(friends, uid)
 	var my_follows := _bucket(follows, uid)
-	if not persisted:
+	if not persisted and th == "":
 		# Re-seed from the phone: who I follow, who my friends are, who I asked.
 		# Accounts already in the database skip this: the server's copy is the truth.
 		var new_follows := {}
@@ -302,6 +302,8 @@ func on_hello(cid: int, msg: Dictionary, now_unix: int) -> String:
 	var me := card(uid)
 	me["av"] = int(u.get("av", -1))
 	me["has_pw"] = str(u.get("pw", "")) != ""
+	me["has_bday"] = str(u.get("birthday", "")) != ""
+	me["email"] = str(u.get("email", ""))
 	var welcome := {"t": "s_welcome", "me": me, "req_in": in_req, "req_out": out_req, "friends": friend_cards,
 		"following": following_cards, "server_time": now_unix, "stored": store != null and store.writable}
 	if plox != null:
@@ -380,9 +382,11 @@ func _save_user(uid: String) -> void:
 	if store == null or not store.writable or not users.has(uid):
 		return
 	var u: Dictionary = users[uid]
-	_db("insert into bp_users (uid, name, username, bio, av, last_seen, pw, created) values ($1, $2, $3, $4, $5, $6, $7, $8) on conflict (uid) do update set name = excluded.name, username = excluded.username, bio = excluded.bio, av = excluded.av, last_seen = excluded.last_seen, pw = excluded.pw",
+	if int(u.get("created", 0)) == 0:
+		u.created = int(Time.get_unix_time_from_system())
+	_db("insert into bp_users (uid, name, username, bio, av, last_seen, pw, created, birthday, email) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) on conflict (uid) do update set name = excluded.name, username = excluded.username, bio = excluded.bio, av = excluded.av, last_seen = excluded.last_seen, pw = excluded.pw, birthday = excluded.birthday, email = excluded.email",
 		[uid, str(u.get("name", "Player")), str(u.get("username", "")), str(u.get("bio", "")), int(u.get("av", -1)),
-		int(u.get("last_seen", 0)), u.get("pw") if str(u.get("pw", "")) != "" else null, int(Time.get_unix_time_from_system())])
+		int(u.get("last_seen", 0)), u.get("pw") if str(u.get("pw", "")) != "" else null, int(u.created), str(u.get("birthday", "")), str(u.get("email", ""))])
 	u.persisted = true
 
 
@@ -428,6 +432,9 @@ func load_from(data: Dictionary) -> void:
 		u.av = clean_av(r.get("av"))
 		u.last_seen = int(str(r.get("last_seen", "0")))
 		u.pw = str(r.get("pw")) if r.get("pw") != null else ""
+		u.created = int(str(r.get("created", "0")))
+		u.birthday = str(r.get("birthday", "")) if r.get("birthday") != null else ""
+		u.email = str(r.get("email", "")) if r.get("email") != null else ""
 		u.seeded = true
 		u.persisted = true
 		if not u.has("cid"):
@@ -506,6 +513,153 @@ func on_login(msg: Dictionary, now_unix: int) -> Dictionary:
 	var me := card(uid)
 	me["av"] = int(users[uid].get("av", -1))
 	return {"t": "s_login_res", "ok": true, "token": token, "uid": uid, "me": me}
+
+
+# ------------------------------------------------------------------ sign up (0.7.0)
+
+var signup_times: Array = []   # unix times of recent sign-ups, server-wide
+
+
+static func clean_birthday(v) -> String:
+	var s := str(v) if v is String else ""
+	var parts := s.split("-")
+	if parts.size() != 3 or parts[0].length() != 4 or not parts[0].is_valid_int() or not parts[1].is_valid_int() or not parts[2].is_valid_int():
+		return ""
+	var y := int(parts[0])
+	var m := int(parts[1])
+	var d := int(parts[2])
+	var now := Time.get_date_dict_from_system()
+	if y < 1900 or y > int(now.year) or m < 1 or m > 12 or d < 1 or d > 31:
+		return ""
+	var t := Time.get_unix_time_from_datetime_dict({"year": y, "month": m, "day": d, "hour": 12})
+	var back := Time.get_date_dict_from_unix_time(t)
+	if int(back.day) != d or t > Time.get_unix_time_from_system():
+		return ""
+	return "%04d-%02d-%02d" % [y, m, d]
+
+
+static func age_from(bday: String) -> int:
+	if bday == "":
+		return -1
+	var p := bday.split("-")
+	var now := Time.get_date_dict_from_system()
+	var age := int(now.year) - int(p[0])
+	if int(now.month) < int(p[1]) or (int(now.month) == int(p[1]) and int(now.day) < int(p[2])):
+		age -= 1
+	return age
+
+
+static func clean_email(v) -> String:
+	var s := (str(v) if v is String else "").strip_edges().to_lower()
+	if s == "":
+		return ""
+	if s.length() > 120 or s.count("@") != 1 or s.contains(" "):
+		return "!"
+	var parts := s.split("@")
+	if parts[0] == "" or not parts[1].contains(".") or parts[1].begins_with(".") or parts[1].ends_with("."):
+		return "!"
+	return s
+
+
+## Why a username can't be taken, or "" when it is free. Same rules as sign-up.
+func name_problem(raw, for_uid := "") -> String:
+	var want := str(raw) if raw is String else ""
+	var un := clean_username(want.strip_edges().trim_prefix("@"))
+	if un != want.strip_edges().trim_prefix("@").to_lower():
+		return "Use only letters, numbers, _ and ."
+	if un.length() < 3:
+		return "At least 3 characters."
+	if un.length() > 20:
+		return "20 characters at most."
+	if plox != null and plox.filter_text(un) != un:
+		return "That name isn't allowed."
+	for w in ["admin", "moderator", "plux_staff", "official"]:
+		if un.contains(w):
+			return "That name isn't allowed."
+	for x in users:
+		if x != for_uid and str(users[x].get("username", "")) == un:
+			return "That username is taken."
+	return ""
+
+
+func on_name_check(msg: Dictionary) -> Dictionary:
+	var why := name_problem(msg.get("username"))
+	return {"t": "s_name_res", "username": str(msg.get("username", "")).substr(0, 24), "ok": why == "", "why": why}
+
+
+## Makes a new account with a username and password. Works before s_hello, like
+## s_login; the phone then says s_hello with the token it gets back.
+func on_signup(msg: Dictionary, now_unix: int) -> Dictionary:
+	var res := {"t": "s_signup_res", "ok": false, "why": "", "field": ""}
+	if plox != null and plox.cfg.b("maintenance"):
+		res.why = "Plux is under maintenance. Try again soon."
+		return res
+	var why := name_problem(msg.get("username"))
+	if why != "":
+		res.why = why
+		res.field = "username"
+		return res
+	var pw = msg.get("password")
+	if not (pw is String) or pw.length() < MIN_PW or pw.length() > MAX_PW:
+		res.why = "Password must be %d to %d characters." % [MIN_PW, MAX_PW]
+		res.field = "password"
+		return res
+	var un := clean_username(str(msg.get("username")).strip_edges().trim_prefix("@"))
+	if pw.to_lower() == un:
+		res.why = "Pick a password that isn't your username."
+		res.field = "password"
+		return res
+	var bday := clean_birthday(msg.get("birthday"))
+	if bday == "" or age_from(bday) > 120:
+		res.why = "Enter a real birthday."
+		res.field = "birthday"
+		return res
+	var email := clean_email(msg.get("email"))
+	if email == "!":
+		res.why = "That email doesn't look right."
+		res.field = "email"
+		return res
+	# Server-wide brake on account farming.
+	var recent: Array = []
+	for t in signup_times:
+		if now_unix - int(t) < 60:
+			recent.append(t)
+	signup_times = recent
+	if signup_times.size() >= 20:
+		res.why = "Lots of people are signing up. Try again in a minute."
+		return res
+	signup_times.append(now_unix)
+	var uid := Crypto.new().generate_random_bytes(8).hex_encode()
+	var name := Protocol.sanitize_name(msg.get("name", un))
+	if name == "Player" or name.strip_edges() == "":
+		name = un
+	users[uid] = {"uid": uid, "cid": -1, "name": name, "username": un, "bio": "", "av": clean_av(msg.get("av")),
+		"last_seen": now_unix, "pw": hash_pw(pw), "created": now_unix, "birthday": bday, "email": email, "seeded": true}
+	_save_user(uid)
+	if plox != null:
+		plox.count("signups")
+		# Signed up with a friend's invite code: they become friends straight away.
+		var inviter := plox.uid_for_invite(str(msg.get("invite", ""))) if str(msg.get("invite", "")) != "" else ""
+		if inviter != "" and inviter != uid:
+			_bucket(friends, uid)[inviter] = true
+			_bucket(friends, inviter)[uid] = true
+			_db_friend(uid, inviter, true)
+			plox.invite_joins[inviter] = int(plox.invite_joins.get(inviter, 0)) + 1
+			plox.count("invite_signups")
+			_push(inviter, {"t": "s_notice", "kind": "friends", "from": card(uid, inviter), "invite": true})
+			res["invited_by"] = str(users[inviter].get("name", ""))
+	var token := Crypto.new().generate_random_bytes(24).hex_encode()
+	var th := token.sha256_text()
+	sessions[th] = uid
+	_db("insert into bp_sessions (th, uid, created) values ($1, $2, $3) on conflict do nothing", [th, uid, now_unix])
+	_log.call("social: @%s signed up" % un)
+	var me := card(uid)
+	me["av"] = int(users[uid].av)
+	res.ok = true
+	res["token"] = token
+	res["uid"] = uid
+	res["me"] = me
+	return res
 
 
 func is_signed_in(cid: int) -> bool:
@@ -720,6 +874,54 @@ func handle(cid: int, msg: Dictionary, now_unix: int) -> String:
 				res["stored"] = store != null and store.writable
 				_log.call("social: @%s set a password" % u.username)
 			_send.call(cid, res)
+		"s_finish":
+			# 0.7.0: an account made on a phone before sign-up existed picks its
+			# username, password and birthday, keeping friends, Plux and items.
+			var u: Dictionary = users[me]
+			var res := {"t": "s_finish_res", "rid": rid, "ok": false, "why": "", "field": ""}
+			var want := str(msg.get("username", u.get("username", "")))
+			var un := clean_username(want.strip_edges().trim_prefix("@"))
+			var why := "" if un == str(u.get("username", "")) and un.length() >= 3 else name_problem(want, me)
+			var pw = msg.get("password")
+			var bday := clean_birthday(msg.get("birthday"))
+			var email := clean_email(msg.get("email"))
+			if why != "":
+				res.why = why
+				res.field = "username"
+			elif str(u.get("pw", "")) != "" and not (msg.get("old") is String and check_pw(str(msg.get("old")), str(u.pw))):
+				res.why = "Your current password is wrong."
+				res.field = "old"
+			elif not (pw is String) or pw.length() < MIN_PW or pw.length() > MAX_PW:
+				res.why = "Password must be %d to %d characters." % [MIN_PW, MAX_PW]
+				res.field = "password"
+			elif bday == "" or age_from(bday) > 120:
+				res.why = "Enter a real birthday."
+				res.field = "birthday"
+			elif email == "!":
+				res.why = "That email doesn't look right."
+				res.field = "email"
+			else:
+				u.username = un
+				u.pw = hash_pw(pw)
+				u.birthday = bday
+				u.email = email
+				_save_user(me)
+				res.ok = true
+				res["me"] = card(me)
+				res.me["av"] = int(u.get("av", -1))
+				res.me["has_pw"] = true
+				res.me["has_bday"] = true
+				res.me["email"] = email
+				_log.call("social: @%s finished setting up the account" % un)
+			_send.call(cid, res)
+		"s_name_check":
+			var r := on_name_check(msg)
+			r["rid"] = rid
+			var w0 := clean_username(str(msg.get("username", "")).strip_edges().trim_prefix("@"))
+			if w0 == str(users[me].get("username", "")):
+				r.ok = true
+				r.why = ""
+			_send.call(cid, r)
 		"s_history":
 			var w = msg.get("with")
 			if not valid_uid(w) or w == me:

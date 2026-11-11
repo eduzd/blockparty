@@ -23,6 +23,8 @@ const SCHEMA := [
 	"create table if not exists plox_reports (id bigserial primary key, ts bigint not null, from_uid text not null, target text not null, kind text not null, text text not null default '', status text not null default 'open')",
 	"create table if not exists plox_audit (id bigserial primary key, ts bigint not null, who text not null, action text not null, detail text not null default '')",
 	"create table if not exists plox_ai_log (id bigserial primary key, ts bigint not null, uid text not null, prompt text not null, ok boolean not null, ms int not null default 0, why text not null default '')",
+	"create table if not exists plox_trades (id text primary key, from_uid text not null, to_uid text not null, give text not null default '', get_oids text not null default '', coins_give bigint not null default 0, coins_get bigint not null default 0, status text not null default 'open', created bigint not null default 0, updated bigint not null default 0, why text not null default '')",
+	"create table if not exists plox_orders (id text primary key, uid text not null, pack text not null, plux bigint not null, price text not null default '0', cur text not null default 'USD', provider text not null default '', mode text not null default 'sandbox', status text not null default 'created', created bigint not null default 0, paid bigint not null default 0, pay_ref text unique)",
 	"create table if not exists plox_daily (day int not null, k text not null, n bigint not null default 0, primary key (day, k))",
 ]
 const LOADS := [
@@ -36,6 +38,8 @@ const LOADS := [
 	["reports", "select id, ts, from_uid, target, kind, text, status from plox_reports order by id desc limit 300"],
 	["audit", "select id, ts, who, action, detail from plox_audit order by id desc limit 300"],
 	["ai_log", "select id, ts, uid, prompt, ok, ms, why from plox_ai_log order by id desc limit 300"],
+	["trades", "select id, from_uid, to_uid, give, get_oids, coins_give, coins_get, status, created, updated, why from plox_trades where status = 'open' or updated > extract(epoch from now())::bigint - 30 * 86400"],
+	["orders", "select id, uid, pack, plux, price, cur, provider, mode, status, created, paid, pay_ref from plox_orders where status in ('created', 'paid') or created > extract(epoch from now())::bigint - 30 * 86400"],
 	["daily", "select day, k, n from plox_daily where day > (extract(epoch from now())::bigint / 86400) - 35"],
 ]
 const ADMIN_LOCK_FAILS := 5
@@ -60,6 +64,9 @@ var audit: Array = []
 var ai_log: Array = []
 var daily := {}          # day -> {k: n}
 var playing := {}        # uid -> "pop" | "neon" | "game:<gid>"
+var playing_room := {}   # uid -> room code friends can join (0.7.0)
+var invite_joins := {}  # uid -> how many people signed up with their code (since restart)
+var invite_times := {}   # uid -> [unix, ...] recent invites, for the rate limit
 var plays_seen := {}     # "uid:gid" -> unix
 var tickets := {}        # ticket -> [uid, expires_unix]
 var admin_cids := {}     # cid -> true
@@ -75,10 +82,16 @@ var cpu_pct := 0.0
 var _cpu_at := 0
 var started_unix := 0
 var loaded := false
+var trade: PloxTrade
+var pay: PloxPay
+var neon_paid := {}   # uid -> [day, stays paid today]
+var goal_paid := {}   # uid:gid -> unix of the last goal reward
 
 
 func _init(p_hub: SocialHub) -> void:
 	hub = p_hub
+	trade = PloxTrade.new(self)
+	pay = PloxPay.new(self)
 	started_unix = int(Time.get_unix_time_from_system())
 	_set_default_items()
 	var env_pw := OS.get_environment("ADMIN_PASSWORD") if OS.has_environment("ADMIN_PASSWORD") else ""
@@ -186,6 +199,8 @@ func load_from(data: Dictionary) -> void:
 		if not daily.has(d):
 			daily[d] = {}
 		daily[d][str(r.k)] = int(r.n)
+	trade.load_rows(data.get("trades", []))
+	pay.load_rows(data.get("orders", []))
 	loaded = true
 
 
@@ -232,7 +247,7 @@ func card_extra(uid: String, out: Dictionary) -> void:
 	if not eq.is_empty():
 		out["eq"] = eq
 	if playing.has(uid) and hub._online(uid):
-		out["playing"] = _playing_label(str(playing[uid]))
+		out["playing"] = _playing_full(uid)
 
 
 func _playing_label(p: String) -> Dictionary:
@@ -242,6 +257,39 @@ func _playing_label(p: String) -> Dictionary:
 			return {"kind": "game", "gid": gid, "title": games[gid].title}
 		return {"kind": "game", "gid": "", "title": "a Studio game"}
 	return {"kind": p, "title": {"pop": "Pop-Up Panic", "neon": "Neon Bounce", "studio": "Studio"}.get(p, "a game")}
+
+
+func _playing_full(uid: String) -> Dictionary:
+	if not playing.has(uid):
+		return {}
+	var d := _playing_label(str(playing[uid]))
+	if playing_room.has(uid) and d.kind in ["pop", "neon"]:
+		d["room"] = playing_room[uid]
+	return d
+
+
+static func clean_room(v) -> String:
+	var s := (str(v) if v is String else "").to_upper()
+	var out := ""
+	for ch in s:
+		if (ch >= "A" and ch <= "Z") or (ch >= "0" and ch <= "9"):
+			out += ch
+	return out.substr(0, 12)
+
+
+## Stable invite code for a player, e.g. "7F3A9C21".
+static func invite_code(uid: String) -> String:
+	return ("plux-invite:" + uid).sha256_text().substr(0, 8).to_upper()
+
+
+func uid_for_invite(code: String) -> String:
+	code = code.strip_edges().to_upper()
+	if code.length() != 8:
+		return ""
+	for uid in hub.users:
+		if invite_code(uid) == code:
+			return uid
+	return ""
 
 
 ## Added to the welcome every phone gets.
@@ -303,6 +351,36 @@ func ticket_uid(t) -> String:
 	return str(e[0])
 
 
+## Pays a player for playing, inside the shared daily cap. Returns the Plux paid.
+func earn(uid: String, amount: int, why: String) -> int:
+	if amount <= 0 or uid == "" or not hub.users.has(uid) or ban_reason(uid) != "":
+		return 0
+	var d := today(_now())
+	var w := wallet(uid)
+	if int(w.earn_day) != d:
+		w.earn_day = d
+		w.earn_n = 0
+	if int(w.earn_n) >= cfg.i("round_rewards_per_day"):
+		return 0
+	w.earn_n = int(w.earn_n) + 1
+	w.coins = int(w.coins) + amount
+	_db("update plox_wallet set coins = coins + $2, earn_day = $3, earn_n = $4 where uid = $1", [uid, amount, d, int(w.earn_n)])
+	count("plux_earned", amount)
+	hub._push(uid, {"t": "s_plux", "coins": int(w.coins), "got": amount, "why": why})
+	return amount
+
+
+## A player left a Neon Bounce room after `secs` seconds: one reward per full
+## neon_reward_s, at most 5 a visit.
+func on_neon_left(uid: String, secs: int) -> void:
+	if not cfg.b("f_neon"):
+		return
+	var stays := mini(5, secs / maxi(15, cfg.i("neon_reward_s")))
+	for k in stays:
+		if earn(uid, cfg.i("coins_neon"), "neon") == 0:
+			break
+
+
 ## Pop-Up Panic round ended: humans get Plux, capped per day. uids: {client id: uid}.
 func on_pop_round(scores: Dictionary, uids: Dictionary) -> void:
 	var best := -1
@@ -332,7 +410,10 @@ func on_pop_round(scores: Dictionary, uids: Dictionary) -> void:
 
 const PLAYER_TYPES := ["s_eco", "s_daily", "s_buy", "s_equip", "s_ticket", "s_playing", "s_report",
 	"s_studio_mine", "s_studio_get", "s_studio_save", "s_studio_publish", "s_studio_delete",
-	"s_games", "s_game_get", "s_game_played", "s_game_like", "s_ai_build"]
+	"s_games", "s_game_get", "s_game_played", "s_game_like", "s_ai_build",
+	"s_inv", "s_trades", "s_trade_offer", "s_trade_accept", "s_trade_decline", "s_trade_cancel",
+	"s_game_done", "s_packs", "s_pay_start", "s_pay_confirm", "s_orders",
+	"s_invite", "s_invite_reply", "s_invite_code"]
 
 
 func owns(t: String) -> bool:
@@ -392,10 +473,66 @@ func handle(cid: int, me: String, msg: Dictionary, rid, now: int) -> String:
 			var p := str(msg.get("what", ""))
 			if p == "":
 				playing.erase(me)
+				playing_room.erase(me)
 			elif p in ["pop", "neon", "studio"] or (p.begins_with("game:") and p.length() < 40):
 				playing[me] = p
+				var room := clean_room(msg.get("room", ""))
+				if room != "":
+					playing_room[me] = room
+				else:
+					playing_room.erase(me)
 			for f in hub.friends.get(me, {}):
-				hub._push(f, {"t": "s_playing", "uid": me, "playing": _playing_label(p) if p != "" else {}})
+				hub._push(f, {"t": "s_playing", "uid": me, "playing": _playing_full(me) if p != "" else {}})
+		"s_invite":
+			var res := {"t": "s_invite_res", "ok": false, "why": "", "sent": 0, "offline": 0}
+			var what := str(msg.get("what", ""))
+			var room := clean_room(msg.get("room", ""))
+			var gid := str(msg.get("gid", "")).substr(0, 40)
+			var to = msg.get("to")
+			if not cfg.b("f_invites"):
+				res.why = "Invites are switched off right now."
+			elif not (what in ["pop", "neon", "game"]) or (what != "game" and room == "") or (what == "game" and not (games.has(gid) and games[gid].status == "pub")):
+				res.why = "There's no game to invite to."
+			elif not (to is Array) or to.is_empty():
+				res.why = "Pick a friend."
+			else:
+				var recent: Array = []
+				for t0 in invite_times.get(me, []):
+					if now - int(t0) < 60:
+						recent.append(t0)
+				var title: String = games[gid].title if what == "game" else {"pop": "Pop-Up Panic", "neon": "Neon Bounce"}[what]
+				var from := hub._small(me)
+				from["av"] = int(hub.users[me].get("av", -1))
+				for f in to.slice(0, 20):
+					var fu := str(f)
+					if not hub.friends.get(me, {}).has(fu):
+						continue
+					if recent.size() >= 30:
+						res.why = "Slow down a little: too many invites."
+						break
+					recent.append(now)
+					if not hub._online(fu):
+						res.offline += 1
+						continue
+					hub._push(fu, {"t": "s_invite_in", "id": Crypto.new().generate_random_bytes(6).hex_encode(), "from": from,
+						"what": what, "title": title, "room": room, "gid": gid, "ts": now})
+					res.sent += 1
+				invite_times[me] = recent
+				res.ok = res.sent > 0 or res.offline > 0
+				count("invites", res.sent)
+			reply.call(res)
+		"s_invite_reply":
+			var to := str(msg.get("to", ""))
+			if hub.friends.get(me, {}).has(to):
+				hub._push(to, {"t": "s_invite_ans", "uid": me, "name": str(hub.users[me].get("name", "")), "join": bool(msg.get("join", false))})
+			reply.call({"t": "s_invite_reply_res", "ok": true})
+		"s_invite_code":
+			var code := invite_code(me)
+			var url := cfg.s("download_url")
+			var text := "Play with me on Plux! My invite code is %s." % code
+			if url != "":
+				text += " Get the app: " + url
+			reply.call({"t": "s_invite_code_res", "code": code, "url": url, "text": text, "joined": int(invite_joins.get(me, 0))})
 		"s_report":
 			var target := str(msg.get("target", "")).substr(0, 64)
 			var kind := str(msg.get("kind", "user"))
@@ -477,6 +614,45 @@ func handle(cid: int, me: String, msg: Dictionary, rid, now: int) -> String:
 			reply.call({"t": "s_game_like_res", "gid": gid, "liked": on, "likes": int(games[gid].likes)})
 		"s_ai_build":
 			_ai_build(me, msg, reply, now)
+		"s_game_done":
+			# Reached the goal of a published Studio game. Paid once per game per
+			# 10 minutes, never for your own game, and only after a real attempt.
+			var gid := str(msg.get("gid", ""))
+			var ms = msg.get("ms", 0)
+			if not games.has(gid) or games[gid].status != "pub" or games[gid].owner == me:
+				reply.call({"t": "s_game_done_res", "gid": gid, "got": 0})
+				return ""
+			var key := me + ":" + gid
+			var first := not goal_paid.has(key)
+			var got := 0
+			if (ms is int or ms is float) and int(ms) >= 4000 and now - int(goal_paid.get(key, 0)) >= 600:
+				goal_paid[key] = now
+				got = earn(me, cfg.i("coins_studio_goal") + (cfg.i("coins_studio_first") if first else 0), "goal")
+			reply.call({"t": "s_game_done_res", "gid": gid, "got": got})
+		"s_packs":
+			reply.call(pay.store_info(me))
+		"s_pay_start":
+			reply.call(pay.start(me, msg, now))
+		"s_pay_confirm":
+			reply.call(pay.confirm(me, msg, now))
+		"s_orders":
+			reply.call({"t": "s_orders_res", "orders": pay.mine(me)})
+		"s_inv":
+			var w := str(msg.get("w", ""))
+			if w != me and not hub.friends.get(me, {}).has(w):
+				reply.call({"t": "s_inv_res", "ok": false, "w": w, "why": "You can only see a friend's items."})
+				return ""
+			reply.call({"t": "s_inv_res", "ok": true, "w": w, "items": trade.inventory(w), "coins": int(wallet(w).coins) if w == me else -1})
+		"s_trades":
+			reply.call({"t": "s_trades_res", "trades": trade.list_for(me, now)})
+		"s_trade_offer":
+			reply.call(trade.offer(me, msg, now))
+		"s_trade_accept":
+			reply.call(trade.accept(me, str(msg.get("id", "")), now))
+		"s_trade_decline":
+			reply.call(trade.refuse(me, str(msg.get("id", "")), now, "decline"))
+		"s_trade_cancel":
+			reply.call(trade.refuse(me, str(msg.get("id", "")), now, "cancel"))
 	return ""
 
 
@@ -787,7 +963,11 @@ func admin_drop(cid: int) -> void:
 
 
 func _audit(action: String, detail: String) -> void:
-	var e := {"id": 0, "ts": _now(), "who": "admin", "action": action, "detail": detail.substr(0, 500)}
+	_audit_as("admin", action, detail)
+
+
+func _audit_as(who: String, action: String, detail: String) -> void:
+	var e := {"id": 0, "ts": _now(), "who": who, "action": action, "detail": detail.substr(0, 500)}
 	audit.push_front(e)
 	if audit.size() > 300:
 		audit.pop_back()
@@ -877,7 +1057,8 @@ func _user_row(uid: String) -> Dictionary:
 	return {"uid": uid, "name": str(u.get("name", "Player")), "username": str(u.get("username", "")), "online": hub._online(uid),
 		"seen": int(u.get("last_seen", 0)), "plux": int(w.get("coins", 0)), "items": owned.get(uid, {}).size(),
 		"friends": hub.friends.get(uid, {}).size(), "has_pw": str(u.get("pw", "")) != "", "av": int(u.get("av", -1)),
-		"banned": ban_reason(uid) != "", "ban": bans.get(uid, {})}
+		"banned": ban_reason(uid) != "", "ban": bans.get(uid, {}), "created": int(u.get("created", 0)),
+		"age": SocialHub.age_from(str(u.get("birthday", ""))), "email": str(u.get("email", ""))}
 
 
 ## Admin messages. Returns "" or an error code for the referee.
@@ -922,7 +1103,10 @@ func admin_handle(cid: int, msg: Dictionary, send: Callable) -> String:
 					continue
 				if q == "" or str(u.get("username", "")).to_lower().contains(q) or str(u.get("name", "")).to_lower().contains(q) or uid.begins_with(q):
 					rows.append(_user_row(uid))
-			rows.sort_custom(func(a, b): return (1 if a.online else 0) > (1 if b.online else 0) or (a.online == b.online and int(a.seen) > int(b.seen)))
+			if str(msg.get("sort", "")) == "new":
+				rows.sort_custom(func(a, b): return int(a.created) > int(b.created))
+			else:
+				rows.sort_custom(func(a, b): return (1 if a.online else 0) > (1 if b.online else 0) or (a.online == b.online and int(a.seen) > int(b.seen)))
 			reply.call({"t": "a_users_res", "users": rows.slice(0, 60), "total": rows.size()})
 		"a_ban":
 			var uid := str(msg.get("uid", ""))
@@ -1085,6 +1269,12 @@ func admin_handle(cid: int, msg: Dictionary, send: Callable) -> String:
 				var ms := Time.get_ticks_msec() - started
 				_ai_note("admin", "(test)" if not full else "(test build)", ok, ms, why)
 				reply.call({"t": "a_ai_test_res", "ok": ok, "why": why, "ms": ms, "parts": level.get("parts", []).size(), "title": level.get("title", "")}), not full)
+		"a_orders":
+			var r := pay.admin_list()
+			r["t"] = "a_orders_res"
+			reply.call(r)
+		"a_trades":
+			reply.call({"t": "a_trades_res", "trades": trade.admin_list(str(msg.get("q", "")).strip_edges().to_lower().substr(0, 40))})
 		"a_audit":
 			reply.call({"t": "a_audit_res", "audit": audit.slice(0, 150)})
 		"a_admin_pw":

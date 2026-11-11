@@ -11,7 +11,7 @@ const ok = (cond, what) => { console.log((cond ? 'PASS ' : 'FAIL ') + what); if 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const ROOM = 'PT' + Date.now().toString(36).slice(-4).toUpperCase();
 
-function player(name, extra) {
+function player(name, extra, room) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(URL);
     const c = { ws, name, inbox: [], snaps: [], closed: false };
@@ -23,7 +23,7 @@ function player(name, extra) {
       if (m.t === 'welcome') { c.welcome = m; c.id = m.id; resolve(c); }
       if (m.t === 'kicked') reject(new Error('kicked: ' + m.msg));
     });
-    ws.on('open', () => ws.send(JSON.stringify(Object.assign({ t: 'hello', v: 1, name, room: ROOM }, extra))));
+    ws.on('open', () => ws.send(JSON.stringify(Object.assign({ t: "hello", v: 1, name, room: room || ROOM }, extra))));
     ws.on('close', () => { c.closed = true; });
     ws.on('error', reject);
     setTimeout(() => reject(new Error('no welcome for ' + name)), 70000);
@@ -118,11 +118,18 @@ const state = (c, p, y = 0) => send(c, { t: 'state', p, y });
   const hz = v => Math.hypot(v[0], v[2]);
   ok(bump && bump2 && hz(bump2.v) > hz(bump.v), 'each hit makes the next one stronger (' + (bump2 && hz(bump2.v).toFixed(1)) + ' > ' + (bump && hz(bump.v).toFixed(1)) + ')');
 
-  // Ben falls off: the knockout goes to Ana.
+  // Ben falls off: the knockout goes to whoever hit him last. Usually that is Ana, but on a
+  // slow connection a bot can bonk him in the gap, and then the bot rightly gets it.
   clearInterval(bTimer);
+  const benSeen = b.inbox.length;
   state(b, [16, -6, 0], 0);
   const ko = await wait(a, m => m.t === 'ko' && m.id === b.id);
-  ok(ko && ko.by === a.id && ko.s === 1, 'Ben\'s fall counts as Ana\'s knockout');
+  let lastHitter = a.id;
+  for (const m of b.inbox) {
+    if (m.t === 'ko' && m.id === b.id) break;
+    if (m.t === 'bonk' && m.hit.includes(b.id)) lastHitter = m.id;
+  }
+  ok(ko && ko.by === lastHitter, 'Ben\'s fall counts as a knockout for whoever hit him last' + (lastHitter === a.id ? ' (Ana)' : ' (a bot hit him after Ana)') + (ko ? (ko.by === lastHitter ? '' : ' [got ' + ko.by + ', expected ' + lastHitter + ']') : ' [no ko message]'));
   // He drops back in by himself.
   const back = await wait(b, m => m.t === 'correct' && m.why === 'respawn', 3500);
   ok(back && back.p[1] > 5, 'Ben drops back in from the sky after about 1.7 s');
@@ -136,6 +143,23 @@ const state = (c, p, y = 0) => send(c, { t: 'state', p, y });
   ok(!!seat.welcome, 'a 7th person still gets in when bots fill the room');
   const left = await wait(a, m => m.t === 'leave' && botJoins.some(x => x.id === m.id), 2000);
   ok(!!left, 'a bot leaves to make room for them');
+
+  // Clean room with no bots: Ana's hit and Ben's fall must give Ana exactly one knockout.
+  {
+    const code2 = 'K' + Math.floor(Math.random() * 9e5);
+    const c1 = await player('Cara', { g: 'pop', ch: 1, bots: 0 }, code2);
+    const d1 = await player('Dan', { g: 'pop', ch: 2, bots: 0 }, code2);
+    const cp = [3, 1, 0], dp = [4.5, 1, 0];
+    const t1 = setInterval(() => { state(c1, cp, -Math.PI / 2); state(d1, dp, 0); }, 50);
+    await sleep(2400);   // past the 2 s join shield
+    send(c1, { t: 'bonk', y: -Math.PI / 2 });
+    const h = await wait(d1, m => m.t === 'bonk' && m.id === c1.id && m.hit.includes(d1.id), 2500);
+    clearInterval(t1);
+    state(d1, [16, -6, 0], 0);
+    const k2 = await wait(c1, m => m.t === 'ko' && m.id === d1.id, 2500);
+    ok(!!h && k2 && k2.by === c1.id && k2.s === 1, 'with no bots, a fall after a bonk gives the bonker exactly 1 knockout' + (h ? '' : ' [bonk missed]') + (k2 ? (k2.by === c1.id && k2.s === 1 ? '' : ' [by=' + k2.by + ' s=' + k2.s + ']') : ' [no ko]'));
+    c1.ws.close(); d1.ws.close();
+  }
 
   // Neon world stays separate.
   const n = await new Promise((resolve, reject) => {
