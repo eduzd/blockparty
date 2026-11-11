@@ -488,6 +488,13 @@ func _home() -> Control:
 	var title := ("Hi, " + _first_name()) if _first_name() != "" else "Plux"
 	var page := UiKit.pinned_page(title, Callable(), av_btn, [_plux_pill_live(), bell])
 	var content: VBoxContainer = page[1]
+	# 0.7.0: notices set live from Plux Admin, and friends playing right now.
+	var notices := UiKit.vbox()
+	content.add_child(notices)
+	_live(notices, func(box: VBoxContainer): _home_notices(box))
+	if social.feature("studio"):
+		var create := UiKit.primary_button("Create a game", "sparkles", func(): push({"k": "studio"}))
+		content.add_child(UiKit.margin(create, 16, 8, 16, 4))
 	var room_now := Protocol.sanitize_room(main.settings.get_value("p", "room", Protocol.DEFAULT_ROOM))
 	var hero := UiKit.hero_card("Play online", "Jump into room %s with friends" % room_now, "play", main._on_play_online)
 	content.add_child(hero)
@@ -2038,3 +2045,42 @@ func _eq(u: Dictionary) -> Array:
 	if u.get("uid", "") == social.uid:
 		return social.equipped_cards()
 	return e if e is Array else []
+
+
+
+## Maintenance / update banner, the announcement, and "Friends playing" with Join buttons.
+func _home_notices(box: VBoxContainer) -> void:
+	if not social.blocked.is_empty():
+		var upd: bool = social.blocked.code == "old_version"
+		var msg: String = social.blocked.msg if social.blocked.msg != "" else ("Please update Plux to keep playing." if upd else "Plux is under maintenance. Try again soon.")
+		box.add_child(UiKit.margin(UiKit.empty_state("arrow-path" if upd else "cog-6-tooth", "Update Plux" if upd else "Back soon", msg), 16, 8, 16, 0))
+	var ann := str(social.cfg.get("announce", "")).strip_edges()
+	if ann != "":
+		var card: Array = UiKit.card()
+		var h := UiKit.hbox(12)
+		var ic := TextureRect.new()
+		ic.texture = UiKit.icon_texture("bell")
+		ic.custom_minimum_size = Vector2(24, 24)
+		ic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		ic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		ic.modulate = UiKit.c("primary")
+		h.add_child(ic)
+		var l := UiKit.label(ann, "body_large", UiKit.c("on_surface"))
+		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		h.add_child(l)
+		card[1].add_child(UiKit.margin(h, 16, 14, 16, 14))
+		box.add_child(card[0])
+	if not social.feature("invites"):
+		return
+	var playing := []
+	for uid in social.data.friends:
+		var u = social.data.friends[uid]
+		if u is Dictionary and bool(u.get("online", false)) and u.get("playing") is Dictionary and not (u.playing as Dictionary).is_empty():
+			playing.append(u)
+	if playing.is_empty():
+		return
+	box.add_child(UiKit.section_title("Friends playing now"))
+	var card2: Array = UiKit.card()
+	box.add_child(card2[0])
+	for u in playing.slice(0, 6):
+		card2[1].add_child(_person(u, false))

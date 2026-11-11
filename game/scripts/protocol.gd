@@ -4,6 +4,8 @@ extends RefCounted
 ## The server only trusts what passes these checks.
 
 const VERSION := 1
+## The app build number (Android versionCode). The server can require a minimum one.
+const APP_BUILD := 8
 const SERVER_VERSION := "0.6.0"
 const DEFAULT_PORT := 8910
 const DEFAULT_ROOM := "PLAY"

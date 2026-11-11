@@ -95,7 +95,7 @@ func _process(_delta: float) -> void:
 			state = State.WAITING_WELCOME
 			_phase_started = now
 			_last_rx = now
-			var hello := {"t": "hello", "v": Protocol.VERSION, "name": player_name, "room": room}
+			var hello := {"t": "hello", "v": Protocol.VERSION, "app": Protocol.APP_BUILD, "name": player_name, "room": room}
 			hello.merge(hello_extra)
 			_ws.send_text(Protocol.encode(hello))
 		while _ws.get_available_packet_count() > 0:

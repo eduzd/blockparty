@@ -355,6 +355,13 @@ func _on_social(c: Dictionary, msg: Dictionary) -> void:
 		if msg.get("v") != Protocol.VERSION and msg.get("v") != float(Protocol.VERSION):
 			_kick(c.id, "bad_version", "Please update the app")
 			return
+		# 0.7.0: maintenance mode and the minimum app version, both set live in Plux Admin.
+		if plox != null:
+			var gate := _gate(msg)
+			if gate != "":
+				_send(c.id, {"t": "s_cfg", "cfg": plox.cfg.public()})
+				_kick(c.id, gate, plox.cfg.s("maintenance_msg") if gate == "maintenance" else "Please update Plux to keep playing.")
+				return
 		var err := social.on_hello(c.id, msg, unix)
 		if err != "":
 			_kick(c.id, err, "Sign-in refused")
@@ -447,6 +454,11 @@ func _on_hello(c: Dictionary, msg: Dictionary, now: int) -> void:
 	if msg.get("v") != Protocol.VERSION and msg.get("v") != float(Protocol.VERSION):
 		_kick(c.id, "bad_version", "Please update the app")
 		return
+	if plox != null:
+		var gate := _gate(msg)
+		if gate != "":
+			_kick(c.id, gate, plox.cfg.s("maintenance_msg") if gate == "maintenance" else "Please update Plux to keep playing.")
+			return
 	var room := Protocol.sanitize_room(msg.get("room"))
 	if str(msg.get("g", "")) == "pop":
 		_on_pop_hello(c, msg, room, now)
@@ -831,3 +843,15 @@ func _broadcast(room: String, data: Dictionary, except_id: int) -> void:
 func _log(text: String) -> void:
 	print("[referee] ", text)
 	log_line.emit(text)
+
+
+
+## "maintenance" while maintenance mode is on, "old_version" for an app older than the
+## minimum version, else "". Apps before 0.7.0 don't send their version and count as 0.
+func _gate(msg: Dictionary) -> String:
+	if plox.cfg.b("maintenance"):
+		return "maintenance"
+	var app_v := int(msg.get("app", 0)) if (msg.get("app") is int or msg.get("app") is float) else 0
+	if plox.cfg.i("min_version") > 0 and app_v < plox.cfg.i("min_version"):
+		return "old_version"
+	return ""

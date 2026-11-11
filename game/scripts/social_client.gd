@@ -64,6 +64,8 @@ var _login_ws: WebSocketPeer
 var _login_msg := {}
 var _login_at := 0
 ## 0.7.0: while the welcome screen is up, the phone's own account isn't connected.
+## {"code": "maintenance"|"old_version", "msg": ...} while Plux is closed to this app.
+var blocked := {}
 var hold := false
 var _pre_ws: WebSocketPeer
 var _pre_queue: Array = []
@@ -266,9 +268,9 @@ func _send_hello() -> void:
 	var hello := {}
 	if is_logged_in():
 		# An account this phone logged in to: the server holds it, so send no profile.
-		hello = {"t": "s_hello", "v": Protocol.VERSION, "token": data.token, "sync": bool(data.get("need_sync", false))}
+		hello = {"t": "s_hello", "v": Protocol.VERSION, "app": Protocol.APP_BUILD, "token": data.token, "sync": bool(data.get("need_sync", false))}
 	else:
-		hello = {"t": "s_hello", "v": Protocol.VERSION, "key": data.key, "name": data.name,
+		hello = {"t": "s_hello", "v": Protocol.VERSION, "app": Protocol.APP_BUILD, "key": data.key, "name": data.name,
 			"username": data.username, "bio": data.bio, "av": data.av, "friends": data.friends.keys(),
 			"follows": data.following.keys(), "req_out": data.req_out.keys()}
 	_ws.send_text(JSON.stringify(hello))
@@ -655,7 +657,12 @@ func _on_msg(msg: Dictionary) -> void:
 		"error":
 			if str(msg.get("code", "")) == "banned":
 				banned.emit(str(msg.get("msg", "This account is banned.")))
+			elif str(msg.get("code", "")) in ["maintenance", "old_version"]:
+				# 0.7.0: maintenance mode / too old an app, both set in Plux Admin.
+				blocked = {"code": str(msg.code), "msg": str(msg.get("msg", ""))}
+				cfg_changed.emit()
 		"s_welcome":
+			blocked = {}
 			if msg.get("cfg") is Dictionary:
 				cfg.merge(msg.cfg, true)
 				cfg_changed.emit()
