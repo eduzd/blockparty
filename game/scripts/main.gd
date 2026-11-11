@@ -1,8 +1,8 @@
 extends Node
 ## App entry: menu, game screen, phone hosting, and headless server mode.
 
-## Filled in after the Render deploy. Players can still change it in the menu.
-const DEFAULT_SERVER_URL := "wss://YOUR-SERVICE.onrender.com"
+## Live Render server (free tier). Players can still change it in the menu.
+const DEFAULT_SERVER_URL := "wss://blockparty-server.onrender.com"
 const SETTINGS_PATH := "user://settings.cfg"
 ## UI is laid out in dp (short side = 360 dp) and scaled to the screen; see ScreenUtil.
 
