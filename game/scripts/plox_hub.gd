@@ -76,7 +76,19 @@ var tickets := {}        # ticket -> [uid, expires_unix]
 var admin_cids := {}     # cid -> true
 var _admin_fails: Array = [0, 0]   # count, first fail unix
 var admin_pw_hash := ""
+var admin_test_hash := ""   # ADMIN_TEST_PASSWORD: a second login used only by the automated checks
 var ai_cfg := {"base": "", "model": "", "key_enc": "", "key_tail": ""}
+## 0.7.1: AI agents. Each has its own job, rules (added to its prompt on every call),
+## model (empty = the shared one), switch and daily limit. The admin creates, edits,
+## copies and deletes them in Plux Admin; they live in plox_config under "agents".
+const BUILTIN_AGENTS := [
+	{"id": "studio_builder", "name": "Studio Builder", "job": "Turns a player's idea into a playable game in Studio.", "on": true, "model": "", "rules": "", "per_day": 0, "status": "live", "builtin": true},
+	{"id": "game_editor", "name": "Game Editor", "job": "Changes a Studio game when the player asks in words (\"make it harder\", \"add lava\").", "on": true, "model": "", "rules": "", "per_day": 0, "status": "live", "builtin": true},
+	{"id": "chat_moderator", "name": "Chat Moderator", "job": "Checks chat messages and flags unsafe ones.", "on": false, "model": "", "rules": "", "per_day": 0, "status": "planned", "builtin": true},
+	{"id": "support_helper", "name": "Support Helper", "job": "Answers players' questions about Plux.", "on": false, "model": "", "rules": "", "per_day": 0, "status": "planned", "builtin": true},
+	{"id": "npc", "name": "In-game NPCs", "job": "Characters that talk to players inside games.", "on": false, "model": "", "rules": "", "per_day": 0, "status": "planned", "builtin": true},
+]
+var agents: Array = []
 var _ai_busy := {}
 var _ai_secret := PackedByteArray()
 var bytes_month := {"month": "", "out": 0, "in": 0}
@@ -102,6 +114,14 @@ func _init(p_hub: SocialHub) -> void:
 	if env_pw.length() >= 8:
 		admin_pw_hash = SocialHub.hash_pw(env_pw)
 		_ai_secret = (env_pw + ":plox-ai-key").sha256_buffer()
+	var test_pw := OS.get_environment("ADMIN_TEST_PASSWORD") if OS.has_environment("ADMIN_TEST_PASSWORD") else ""
+	if test_pw.length() >= 16:
+		admin_test_hash = SocialHub.hash_pw(test_pw)
+	# The AI key is locked with its own secret when one is set, so changing the admin
+	# password later never loses the saved key.
+	var key_secret := OS.get_environment("PLUX_KEY_SECRET") if OS.has_environment("PLUX_KEY_SECRET") else ""
+	if key_secret.length() >= 16:
+		_ai_secret = (key_secret + ":plox-ai-key").sha256_buffer()
 
 
 func _set_default_items() -> void:
@@ -183,6 +203,9 @@ func load_from(data: Dictionary) -> void:
 				if v is Dictionary:
 					for kk in ai_cfg:
 						ai_cfg[kk] = str(v.get(kk, ""))
+			"agents":
+				if v is Array:
+					_load_agents(v)
 			"admin_pw":
 				if v is String and v != "":
 					admin_pw_hash = v
@@ -375,7 +398,8 @@ func _outfits_res(uid: String) -> Dictionary:
 
 
 func ai_cap_for(uid: String) -> int:
-	return cfg.i("ai_per_day") + int(pay.tier_of(uid).get("ai_extra", 0))
+	var pd := int(agent("studio_builder").get("per_day", 0))
+	return (pd if pd > 0 else cfg.i("ai_per_day")) + int(pay.tier_of(uid).get("ai_extra", 0))
 
 
 ## Pays a player for playing, inside the shared daily cap. Returns the Plux paid.
@@ -579,7 +603,8 @@ func handle(cid: int, me: String, msg: Dictionary, rid, now: int) -> String:
 				if games[gid].owner == me and games[gid].status != "removed":
 					out.append(_game_card(games[gid], me))
 			out.sort_custom(func(a, b): return int(a.updated) > int(b.updated))
-			reply.call({"t": "s_studio_mine_res", "games": out})
+			# 0.7.1: Studio says plainly when the AI builder isn't set up yet.
+			reply.call({"t": "s_studio_mine_res", "games": out, "ai": ai_ready() and bool(agent("studio_builder").get("on", true))})
 		"s_studio_get", "s_game_get":
 			var gid := str(msg.get("gid", ""))
 			if not games.has(gid):
@@ -858,6 +883,55 @@ func _store_game(g: Dictionary) -> void:
 
 # ------------------------------------------------------------------ AI level building
 
+func _load_agents(saved: Array) -> void:
+	agents = []
+	var seen := {}
+	for a in saved:
+		var c := _clean_agent(a)
+		if not c.is_empty() and not seen.has(c.id):
+			seen[c.id] = true
+			agents.append(c)
+	for b in BUILTIN_AGENTS:
+		if not seen.has(b.id):
+			agents.append(_clean_agent(b))   # fills in the default rule choices
+
+
+func _clean_agent(a) -> Dictionary:
+	if not (a is Dictionary):
+		return {}
+	var id := str(a.get("id", "")).to_lower().strip_edges()
+	var ok_id := id.length() >= 2 and id.length() <= 32
+	for ch in id:
+		if not (ch in "abcdefghijklmnopqrstuvwxyz0123456789_"):
+			ok_id = false
+	if not ok_id:
+		return {}
+	var builtin := false
+	var status := "custom"
+	for b in BUILTIN_AGENTS:
+		if b.id == id:
+			builtin = true
+			status = b.status
+	var pd = a.get("per_day", 0)
+	return {"opts": AgentRules.clean_opts(a.get("opts", {}), id, builtin), "id": id, "name": str(a.get("name", id)).strip_edges().substr(0, 40), "job": str(a.get("job", "")).strip_edges().substr(0, 200),
+		"on": a.get("on", false) is bool and a.on, "model": str(a.get("model", "")).strip_edges().substr(0, 120),
+		"rules": str(a.get("rules", "")).substr(0, 4000), "per_day": clampi(int(pd) if (pd is int or pd is float) else 0, 0, 1000),
+		"status": status, "builtin": builtin}
+
+
+func agent(id: String) -> Dictionary:
+	if agents.is_empty():
+		_load_agents([])
+	for a in agents:
+		if a.id == id:
+			return a
+	return {}
+
+
+func _save_agents() -> void:
+	_db("insert into plox_config (k, v) values ('agents', $1) on conflict (k) do update set v = $1", [JSON.stringify(agents)])
+
+
 func ai_ready() -> bool:
 	return ai_cfg.base != "" and ai_cfg.model != "" and ai_cfg.key_enc != "" and not _ai_secret.is_empty()
 
@@ -905,14 +979,16 @@ func _ai_build(me: String, msg: Dictionary, reply: Callable, now: int) -> void:
 	if prompt.length() < 4:
 		fail.call("Describe your game in a few words first.")
 		return
-	if not ai_ready():
-		# No AI service set up yet: the built-in word builder makes the game instead,
-		# so Studio still works. It costs nothing, so it doesn't use up daily AI builds.
+	var ag := agent("game_editor" if msg.get("base") is Dictionary else "studio_builder")
+	if not ai_ready() or not bool(ag.get("on", true)):
+		# No AI service set up yet (or the agent is switched off): the built-in word
+		# builder makes the game instead, so Studio still works, and Studio says so.
 		var base0 = PloxLevel.clean(msg.base, cfg.i("studio_max_parts")) if msg.get("base") is Dictionary else null
 		var lv := PloxLevel.clean(PloxLevel.quick_build(prompt, base0), cfg.i("studio_max_parts"))
 		lv.title = filter_text(lv.title)
 		count("ai_quick")
-		reply.call({"t": "s_ai_res", "ok": true, "level": lv, "quick": true, "left": -1})
+		reply.call({"t": "s_ai_res", "ok": true, "level": lv, "quick": true, "left": -1, "ai_off": true,
+			"why": "The AI builder isn't set up yet, so the quick builder made this one."})
 		return
 	if _ai_busy.has(me):
 		fail.call("Your last game is still being built.")
@@ -936,7 +1012,7 @@ func _ai_build(me: String, msg: Dictionary, reply: Callable, now: int) -> void:
 	_ai_call(prompt, func(ok: bool, level: Dictionary, why: String):
 		_ai_busy.erase(me)
 		var ms := Time.get_ticks_msec() - started
-		_ai_note(me, prompt, ok, ms, why)
+		_ai_note(me, ("[edit] " if not change.is_empty() else "") + prompt, ok, ms, why)
 		if ok:
 			reply.call({"t": "s_ai_res", "ok": true, "level": level, "left": maxi(0, ai_cap_for(me) - _ai_used_today(me))})
 		else:
@@ -944,7 +1020,7 @@ func _ai_build(me: String, msg: Dictionary, reply: Callable, now: int) -> void:
 			var lv2 := PloxLevel.clean(PloxLevel.quick_build(prompt, change if not change.is_empty() else null), cfg.i("studio_max_parts"))
 			lv2.title = filter_text(lv2.title)
 			reply.call({"t": "s_ai_res", "ok": true, "level": lv2, "quick": true, "why": "The AI couldn't build that one (%s), so the quick builder made it." % why,
-				"left": maxi(0, ai_cap_for(me) - _ai_used_today(me))}), false, {}, change)
+				"left": maxi(0, ai_cap_for(me) - _ai_used_today(me))}), false, {"agent": ag}, change)
 
 
 func _ai_used_today(uid: String) -> int:
@@ -961,7 +1037,10 @@ func _ai_note(uid: String, prompt: String, ok: bool, ms: int, why: String) -> vo
 ## Calls {base}/chat/completions. done(ok, level, why). A test call uses a tiny prompt.
 func _ai_call(prompt: String, done: Callable, test := false, override := {}, change := {}) -> void:
 	var base := str(override.get("base", ai_cfg.base)).strip_edges().trim_suffix("/")
+	var ag: Dictionary = override.get("agent", {})
 	var model := str(override.get("model", ai_cfg.model)).strip_edges()
+	if str(ag.get("model", "")).strip_edges() != "" and not override.has("model"):
+		model = str(ag.model).strip_edges()
 	var key := str(override.get("key", "")) if str(override.get("key", "")) != "" else _ai_key()
 	if not (base.begins_with("https://") or base.begins_with("http://")):
 		done.call(false, {}, "base URL must start with https://")
@@ -976,7 +1055,11 @@ func _ai_call(prompt: String, done: Callable, test := false, override := {}, cha
 	if test:
 		messages = [{"role": "user", "content": "Reply with exactly this JSON and nothing else: {\"ok\": true}"}]
 	else:
-		messages = [{"role": "system", "content": PloxLevel.ai_system_prompt(mini(cfg.i("studio_max_parts"), 90))},
+		var sys := PloxLevel.ai_system_prompt(mini(cfg.i("studio_max_parts"), 90))
+		var rules_txt := AgentRules.compose(ag) if not ag.is_empty() else ""
+		if rules_txt.strip_edges() != "":
+			sys += "\n\nRules from the Plux team for you (%s). Follow them, but always reply in the JSON format above:\n%s" % [str(ag.get("name", "")), rules_txt]
+		messages = [{"role": "system", "content": sys},
 			{"role": "user", "content": "Build this game: " + prompt}]
 		if not change.is_empty() and change.get("parts", []).size() > 0:
 			messages[1].content = "Here is my current game as JSON:\n" + JSON.stringify(change) \
@@ -1009,6 +1092,8 @@ func _ai_call(prompt: String, done: Callable, test := false, override := {}, cha
 			done.call(true, {}, "")
 			return
 		var level := PloxLevel.clean(obj, cfg.i("studio_max_parts"))
+		if not ag.is_empty():
+			level = AgentRules.enforce_level(level, ag)
 		if level.parts.size() < 3:
 			done.call(false, {}, "too few parts")
 			return
@@ -1051,8 +1136,10 @@ func admin_drop(cid: int) -> void:
 	admin_cids.erase(cid)
 
 
+var _cur_who := "admin"
+
 func _audit(action: String, detail: String) -> void:
-	_audit_as("admin", action, detail)
+	_audit_as(_cur_who, action, detail)
 
 
 func _audit_as(who: String, action: String, detail: String) -> void:
@@ -1159,17 +1246,19 @@ func admin_handle(cid: int, msg: Dictionary, send: Callable) -> String:
 		send.call(d)
 	var now := _now()
 	if t == "a_login":
-		if admin_pw_hash == "":
+		if admin_pw_hash == "" and admin_test_hash == "":
 			reply.call({"t": "a_login_res", "ok": false, "why": "The admin password isn't set on the server (ADMIN_PASSWORD)."})
 			return ""
 		if int(_admin_fails[0]) >= ADMIN_LOCK_FAILS and now - int(_admin_fails[1]) < ADMIN_LOCK_S:
 			reply.call({"t": "a_login_res", "ok": false, "why": "Too many wrong passwords. Try again in 10 minutes."})
 			return ""
 		var pw = msg.get("pw")
-		if pw is String and pw.length() <= 128 and SocialHub.check_pw(pw, admin_pw_hash):
+		var is_owner: bool = pw is String and pw.length() <= 128 and admin_pw_hash != "" and SocialHub.check_pw(pw, admin_pw_hash)
+		var is_test: bool = not is_owner and pw is String and pw.length() <= 128 and admin_test_hash != "" and SocialHub.check_pw(pw, admin_test_hash)
+		if is_owner or is_test:
 			_admin_fails = [0, 0]
-			admin_cids[cid] = true
-			_audit("login", "admin signed in")
+			admin_cids[cid] = "admin" if is_owner else "checks"
+			_audit_as("admin" if is_owner else "checks", "login", "admin signed in" if is_owner else "automated checks signed in")
 			reply.call({"t": "a_login_res", "ok": true, "stats": _stats(), "cfg": cfg.values, "defaults": LiveConfig.DEFAULTS})
 		else:
 			if now - int(_admin_fails[1]) >= ADMIN_LOCK_S:
@@ -1180,6 +1269,7 @@ func admin_handle(cid: int, msg: Dictionary, send: Callable) -> String:
 	if not admin_cids.has(cid):
 		reply.call({"t": "a_err", "why": "not_admin"})
 		return "not_admin"
+	_cur_who = str(admin_cids[cid]) if admin_cids[cid] is String else "admin"
 	match t:
 		"a_stats":
 			reply.call({"t": "a_stats_res", "stats": _stats()})
@@ -1225,9 +1315,18 @@ func admin_handle(cid: int, msg: Dictionary, send: Callable) -> String:
 			if not hub.users.has(uid):
 				reply.call({"t": "a_ok", "ok": false, "why": "No such player."})
 				return ""
-			# Clears the password and signs out other phones; the player sets a new one in Settings.
-			hub.users[uid].pw = ""
-			_db("update bp_users set pw = null where uid = $1", [uid])
+			# With "password": sets a temporary password the admin passes on to the player.
+			# Without: clears the password. Either way every phone is signed out.
+			var tmp = msg.get("password", "")
+			if tmp is String and tmp != "":
+				if tmp.length() < SocialHub.MIN_PW or tmp.length() > SocialHub.MAX_PW:
+					reply.call({"t": "a_ok", "ok": false, "why": "Use %d to %d characters." % [SocialHub.MIN_PW, SocialHub.MAX_PW]})
+					return ""
+				hub.users[uid].pw = SocialHub.hash_pw(tmp)
+				hub._save_user(uid)
+			else:
+				hub.users[uid].pw = ""
+				_db("update bp_users set pw = null where uid = $1", [uid])
 			for th in hub.sessions.keys():
 				if hub.sessions[th] == uid:
 					hub.sessions.erase(th)
@@ -1362,7 +1461,7 @@ func admin_handle(cid: int, msg: Dictionary, send: Callable) -> String:
 			var uid := str(msg.get("uid", ""))
 			var days = msg.get("days", 0)
 			if not hub.users.has(uid) or not (days is int or days is float):
-				reply.call({"t": "a_err", "why": "No such player."})
+				reply.call({"t": "a_ok", "ok": false, "why": "No such player."})
 				return ""
 			if int(days) <= 0:
 				pay.remove_pro(uid)
@@ -1371,19 +1470,109 @@ func admin_handle(cid: int, msg: Dictionary, send: Callable) -> String:
 				var tier := str(msg.get("tier", ""))
 				var all := pay.tiers()
 				if all.is_empty():
-					reply.call({"t": "a_err", "why": "Add a Pro tier first."})
+					reply.call({"t": "a_ok", "ok": false, "why": "Add a Pro tier first."})
 					return ""
 				if not all.any(func(t): return t.id == tier):
 					tier = all[0].id
 				pay.grant_pro(uid, tier, clampi(int(days), 1, 3650), "admin", now)
 				_audit("pro_grant", "%s: %s for %d days" % [str(hub.users[uid].get("username", uid)), tier, int(days)])
-			reply.call({"t": "a_ok", "pro": pay.pro_status(uid)})
+			reply.call({"t": "a_ok", "ok": true, "pro": pay.pro_status(uid)})
 		"a_orders":
 			var r := pay.admin_list()
 			r["t"] = "a_orders_res"
 			reply.call(r)
 		"a_trades":
 			reply.call({"t": "a_trades_res", "trades": trade.admin_list(str(msg.get("q", "")).strip_edges().to_lower().substr(0, 40))})
+		"a_user":
+			var uid := str(msg.get("uid", ""))
+			if not hub.users.has(uid):
+				reply.call({"t": "a_user_res", "ok": false, "why": "No such player."})
+				return ""
+			var inv := []
+			for oid in owned.get(uid, {}):
+				var o: Dictionary = owned[uid][oid]
+				var it: Dictionary = items.get(o.item, {})
+				inv.append({"oid": oid, "item": o.item, "name": str(it.get("name", o.item)), "serial": int(o.serial), "rare": bool(it.get("rare", false))})
+			var mine := []
+			for g in games.values():
+				if g.owner == uid:
+					mine.append({"gid": g.gid, "title": g.title, "status": g.status, "plays": int(g.plays)})
+			var ai_n := 0
+			for e in ai_log:
+				if e.uid == uid and int(e.ts) > now - 86400:
+					ai_n += 1
+			var u: Dictionary = hub.users[uid]
+			reply.call({"t": "a_user_res", "ok": true, "user": _user_row(uid), "items": inv, "games": mine,
+				"pro": pay.pro_status(uid), "ai_today": ai_n, "bio": str(u.get("bio", "")),
+				"follows": hub.follows.get(uid, {}).size()})
+		"a_item_delete":
+			var id := str(msg.get("id", ""))
+			if not items.has(id):
+				reply.call({"t": "a_ok", "ok": false, "why": "No such item."})
+				return ""
+			if int(sold.get(id, 0)) > 0:
+				reply.call({"t": "a_ok", "ok": false, "why": "Players already own this item, so it can only be hidden."})
+				return ""
+			items.erase(id)
+			item_order.erase(id)
+			_db("delete from plox_items where id = $1", [id])
+			_audit("item deleted", id)
+			reply.call({"t": "a_ok", "ok": true})
+		"a_agents":
+			if agents.is_empty():
+				_load_agents([])
+			reply.call({"t": "a_agents_res", "agents": agents, "shared_model": ai_cfg.model, "ready": ai_ready(), "schema": AgentRules.SCHEMA})
+		"a_agent_preview":
+			var c := _clean_agent(msg.get("agent"))
+			reply.call({"t": "a_agent_preview_res", "text": AgentRules.compose(c) if not c.is_empty() else ""})
+		"a_agent_save":
+			var c := _clean_agent(msg.get("agent"))
+			if c.is_empty() or c.name == "":
+				reply.call({"t": "a_ok", "ok": false, "why": "Give the agent a name and an id (letters, numbers, _)."})
+				return ""
+			if agents.is_empty():
+				_load_agents([])
+			var found := false
+			for i in agents.size():
+				if agents[i].id == c.id:
+					agents[i] = c
+					found = true
+			if not found:
+				if agents.size() >= 40:
+					reply.call({"t": "a_ok", "ok": false, "why": "That's the most agents for now (40)."})
+					return ""
+				agents.append(c)
+			_save_agents()
+			_audit("agent saved", "%s (%s)%s" % [c.name, "on" if c.on else "off", ", new" if not found else ""])
+			reply.call({"t": "a_ok", "ok": true, "agent": c})
+		"a_agent_delete":
+			var id := str(msg.get("id", ""))
+			var a := agent(id)
+			if a.is_empty():
+				reply.call({"t": "a_ok", "ok": false, "why": "No such agent."})
+				return ""
+			if bool(a.get("builtin", false)):
+				reply.call({"t": "a_ok", "ok": false, "why": "Built-in agents can be switched off but not deleted."})
+				return ""
+			agents.erase(a)
+			_save_agents()
+			_audit("agent deleted", str(a.name))
+			reply.call({"t": "a_ok", "ok": true})
+		"a_agent_test":
+			var a := agent(str(msg.get("id", "")))
+			if a.is_empty():
+				reply.call({"t": "a_ai_test_res", "ok": false, "why": "No such agent.", "ms": 0, "parts": 0, "title": ""})
+				return ""
+			var t0 := Time.get_ticks_msec()
+			var tp := str(msg.get("prompt", "")).strip_edges().substr(0, 200)
+			if tp == "":
+				tp = "a short obstacle course with a jump pad"
+			_ai_call(tp, func(ok: bool, level: Dictionary, why: String):
+				var ms := Time.get_ticks_msec() - t0
+				_ai_note("admin", "(test %s) %s" % [a.name, tp], ok, ms, why)
+				reply.call({"t": "a_ai_test_res", "ok": ok, "why": why, "ms": ms, "parts": level.get("parts", []).size(), "title": level.get("title", "")}), false, {"agent": a})
+		"a_cfg":
+			reply.call({"t": "a_cfg_res", "cfg": cfg.values, "defaults": LiveConfig.DEFAULTS})
 		"a_audit":
 			reply.call({"t": "a_audit_res", "audit": audit.slice(0, 150)})
 		"a_admin_pw":

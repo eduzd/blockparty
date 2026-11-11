@@ -204,6 +204,8 @@ func _build_menu() -> void:
 	menu_buttons.clear()
 	menu_layer = CanvasLayer.new()
 	add_child(menu_layer)
+	if studio_play and is_instance_valid(studio_play):
+		menu_layer.visible = false
 	var bg := ColorRect.new()
 	bg.color = UiKit.c("background")
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -1109,6 +1111,7 @@ func _autotest_social_setup() -> void:
 		"login": shell.select_tab(3); shell.push({"k": "settings"}); shell.push({"k": "login"})
 		"list": shell.push({"k": "list", "uid": social.uid, "kind": "friends"})
 		"shop": shell.push({"k": "shop"})
+		"studio": shell.select_tab(1); shell.push({"k": "studio"})
 		"item": shell.push({"k": "item", "id": scr.get_slice(":", 1)})
 		"user": shell.push({"k": "user", "uid": scr.get_slice(":", 1)})
 		"chat_with": shell.select_tab(2); shell.push({"k": "chat", "uid": scr.get_slice(":", 1)})
@@ -1288,8 +1291,10 @@ func play_studio(level: Dictionary, title: String, can_edit: bool, gid: String) 
 	if studio_play and is_instance_valid(studio_play):
 		studio_play.queue_free()
 	_studio_gid = gid
-	if menu_root and is_instance_valid(menu_root):
-		menu_root.visible = false
+	# 0.7.1: hide the whole menu layer, not just its root. The layer's full-screen
+	# background stayed on top of the 3D world, so Studio games showed a blank page.
+	if menu_layer and is_instance_valid(menu_layer):
+		menu_layer.visible = false
 	studio_play = StudioPlay.new()
 	var col := Color("#335FFF")
 	studio_play.setup(level, title, can_edit, str(social.data.get("name", "You")), col)
@@ -1307,6 +1312,8 @@ func _on_studio_finished(r: Dictionary) -> void:
 		studio_play.queue_free()
 	studio_play = null
 	social.set_playing("")
+	if menu_layer and is_instance_valid(menu_layer):
+		menu_layer.visible = true
 	if menu_root and is_instance_valid(menu_root):
 		menu_root.visible = true
 	_sync_system_bars()
@@ -1332,6 +1339,9 @@ func _autotest_studio(limit: float) -> void:
 			studio_play.test_move = Vector2(sin(autotest_t) * 0.3, -1.0)
 			if fmod(autotest_t, 1.5) < 0.02:
 				studio_play.player.jump_pressed = true
+		if OS.has_environment("AUTOTEST_PLAYSHOT") and autotest_t > limit * 0.4 and not has_meta("pshot"):
+			set_meta("pshot", true)
+			get_viewport().get_texture().get_image().save_png(OS.get_environment("AUTOTEST_PLAYSHOT"))
 		if autotest_t > limit * 0.5:
 			print("AUTOTEST STUDIO play pos=%s stars=%d/%d" % [str(studio_play.player.global_position), studio_play._stars, studio_play._stars_total])
 			studio_play._exit(true)

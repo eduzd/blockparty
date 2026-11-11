@@ -20,6 +20,7 @@ var prompt_text := ""
 var change_text := ""
 var note := ""          # last message from the builder
 var ai_left := -1
+var ai_on := true        # false when the server says the AI builder isn't set up
 var _open_after_ai := false
 var _play_after_load := false
 var _map: StudioMap
@@ -48,6 +49,8 @@ func _on_reply(t: String, msg: Dictionary) -> void:
 				sel = -1
 				ai_left = int(msg.get("left", -1))
 				note = str(msg.get("why", ""))
+				if msg.get("ai_off", false):
+					ai_on = false
 				if note == "":
 					note = "Built by the quick builder." if msg.get("quick", false) else "Built by the AI."
 				change_text = ""
@@ -67,6 +70,8 @@ func _on_reply(t: String, msg: Dictionary) -> void:
 		"s_studio_mine_res":
 			mine = msg.get("games", [])
 			mine_loaded = true
+			if msg.has("ai"):
+				ai_on = bool(msg.ai)
 			s._mark_dirty()
 		"s_games_res":
 			games = msg.get("games", [])
@@ -208,6 +213,9 @@ func studio_screen() -> Control:
 	s._live(live, func(box: VBoxContainer):
 		var go := UiKit.primary_button("Building your game..." if busy == "ai" else "Build my game", "sparkles", func(): build_from_words(e.text))
 		go.disabled = busy != ""
+		if not ai_on:
+			box.add_child(UiKit.margin(UiKit.empty_state("sparkles", "AI not set up yet",
+				"The Plux team hasn't switched on the AI builder yet. For now Studio makes a simpler game from your words."), 16, 12, 16, 0))
 		box.add_child(UiKit.margin(go, 16, 12, 16, 0))
 		box.add_child(UiKit.margin(UiKit.label("Try one of these", "title_small", UiKit.c("on_surface"), false), 20, 16, 20, 6))
 		var flow := HFlowContainer.new()

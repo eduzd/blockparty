@@ -28,7 +28,7 @@ signal trades_changed                             # a trade offer arrived or cha
 signal banned(text: String)
 
 ## App version code (export_presets version/code). The server can ask older apps to update.
-const APP_VERSION := 8
+const APP_VERSION := 9
 var cfg := LiveConfig.DEFAULTS.duplicate(true)
 var eco := {"coins": 0, "eq": [], "inv": [], "daily_ready": false, "daily": 0}
 var shop: Array = []
