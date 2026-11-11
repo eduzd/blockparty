@@ -496,9 +496,7 @@ func _home() -> Control:
 	var notices := UiKit.vbox()
 	content.add_child(notices)
 	_live(notices, func(box: VBoxContainer): _home_notices(box))
-	if social.feature("studio"):
-		var create := UiKit.primary_button("Create a game", "sparkles", func(): push({"k": "studio"}))
-		content.add_child(UiKit.margin(create, 16, 8, 16, 4))
+	# 0.7.2: "Create a game" lives on the Games tab only.
 	var room_now := Protocol.sanitize_room(main.settings.get_value("p", "room", Protocol.DEFAULT_ROOM))
 	var hero := UiKit.hero_card("Play online", "Jump into room %s with friends" % room_now, "play", main._on_play_online)
 	content.add_child(hero)

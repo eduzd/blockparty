@@ -103,7 +103,7 @@ async function hello(c, extra) { send(c, Object.assign({ t: 's_hello', v: 1 }, e
       const sys = (last.body.messages || [])[0].content || '';
       ok(sys.includes('Do not use lava.') && sys.includes('ice world') && sys.includes('Always put a star near the start. ' + tag) && sys.includes('beginners'),
         'dropdowns, toggles and extra rules are in the AI instructions');
-      ok(!sys.includes('test-omni-key') && last.body.messages[1].content.includes('volcano'), 'player prompt sent, key not in the prompt');
+      ok(!sys.includes('test-omni-key') && sys.includes('volcano'), 'player prompt sent, key not in the prompt');
       const ed = await ask(p, { t: 's_ai_build', prompt: 'make it harder', base: b.level }, 's_ai_res', 40000);
       ok(ed && ed.ok && !ed.quick, 'changing the game in words also goes through the AI');
 

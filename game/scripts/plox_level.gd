@@ -94,12 +94,33 @@ static func clean_part(p):
 		pos = pp if pp is Array else ([pp.get("x"), pp.get("y"), pp.get("z")] if pp is Dictionary else [])
 		var ss = p.get("size", null)
 		size = ss if ss is Array else ([ss.get("x"), ss.get("y"), ss.get("z")] if ss is Dictionary else [])
-		rot = p.get("rot", p.get("rotation", 0))
+		rot = p.get("rot", p.get("rotation", p.get("rotY", p.get("rot_y", 0))))
+		if rot is Array:
+			rot = rot[1] if rot.size() >= 2 else 0
+		elif rot is Dictionary:
+			rot = rot.get("y", 0)
 		col = p.get("color", p.get("colour", null))
+		# A material can say what the part really is ("material": "lava").
+		var mat := str(p.get("material", p.get("hazard", ""))).to_lower()
+		if mat in ["lava", "ice", "bounce", "kill", "acid", "fire", "slippery", "trampoline"]:
+			kind = mat
+		elif p.get("hazard") is bool and p.hazard:
+			kind = "lava"
+		elif p.get("moving") is bool and p.moving:
+			kind = "mover"
+		elif p.get("spinning") is bool and p.spinning:
+			kind = "spinner"
 	else:
 		return null
 	match kind:
-		"platform", "floor", "wall", "box", "cube": kind = "block"
+		"platform", "floor", "wall", "box", "cube", "part", "brick", "ramp", "stair", "step", "bridge", "beam", "tower", "pillar", "goal", "finish", "start", "spawn": kind = "block"
+		"slippery", "frozen": kind = "ice"
+		"fire", "magma": kind = "lava"
+		"spring", "launcher", "bouncepad", "bounce_pad": kind = "bounce"
+		"spinning_bar", "spinning_hammer", "rotating_bar", "windmill": kind = "spinner"
+		"moving_block", "slider", "lift": kind = "mover"
+		"gem", "orb", "pickup": kind = "coin"
+		"save", "respawn": kind = "checkpoint"
 		"jump", "jumppad", "jump_pad", "trampoline", "pad": kind = "bounce"
 		"hammer", "spin", "rotator", "sweeper": kind = "spinner"
 		"moving", "moving_platform", "elevator": kind = "mover"
@@ -116,10 +137,31 @@ static func clean_part(p):
 	if col is float or col is int:
 		ci = clampi(int(col), 0, COLORS.size() - 1)
 	elif col is String:
-		var idx := COLORS.find(col.to_upper())
-		if idx >= 0:
-			ci = idx
+		ci = color_index(col, ci)
 	return [kind, v[0], v[1], v[2], s[0], s[1], s[2], _num(rot, -360.0, 360.0, 0.0), ci]
+
+
+## A colour name or #hex to the nearest palette colour.
+static func color_index(col: String, fallback: int) -> int:
+	var c := col.strip_edges().to_lower()
+	var names := {"blue": 0, "navy": 0, "light blue": 1, "sky": 1, "white": 2, "grey": 3, "gray": 3, "slate": 3, "black": 3, "dark": 3,
+		"orange": 4, "red": 4, "brown": 4, "yellow": 5, "gold": 5, "green": 6, "lime": 6, "purple": 7, "violet": 7, "pink": 8, "magenta": 8, "cyan": 9, "teal": 9}
+	if names.has(c):
+		return names[c]
+	if c.is_valid_int():
+		return clampi(int(c), 0, COLORS.size() - 1)
+	if not c.begins_with("#") or not Color.html_is_valid(c):
+		return fallback
+	var want := Color.html(c)
+	var best := fallback
+	var bd := INF
+	for i in COLORS.size():
+		var k := Color.html(COLORS[i])
+		var d := Vector3(k.r - want.r, k.g - want.g, k.b - want.b).length_squared()
+		if d < bd:
+			bd = d
+			best = i
+	return best
 
 
 ## Rebuilds a level from anything. Always returns a playable level.

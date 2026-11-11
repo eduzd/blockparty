@@ -1083,10 +1083,12 @@ func _ai_call(prompt: String, done: Callable, test := false, override := {}, cha
 		var rules_txt := AgentRules.compose(ag) if not ag.is_empty() else ""
 		if rules_txt.strip_edges() != "":
 			sys += "\n\nRules from the Plux team for you (%s). Follow them, but always reply in the JSON format above:\n%s" % [str(ag.get("name", "")), rules_txt]
-		messages = [{"role": "system", "content": sys},
-			{"role": "user", "content": "Build this game: " + prompt + "\n\nFollow the Studio Builder instructions: plan first inside the JSON, then at least 20 parts using the pieces that fit my idea. Reply with the level JSON only."}]
+		# 0.7.2: the instructions go in the user message itself. Some routers (the user's
+		# Omni Route combo among them) drop system messages, so the model never saw them.
+		messages = [{"role": "user", "content": sys + "\n\n=== THE PLAYER'S IDEA ===\nBuild this game: " + prompt
+			+ "\n\nFollow the Studio Builder instructions above exactly: the parts are arrays [kind, x, y, z, sx, sy, sz, rotY, color], plan first inside the JSON, then at least 20 parts using the pieces that fit the idea. Reply with the level JSON only."}]
 		if not change.is_empty() and change.get("parts", []).size() > 0:
-			messages[1].content = "Here is my current game as JSON:\n" + JSON.stringify({"title": change.title, "sky": change.sky, "spawn": change.spawn, "goal": change.goal, "parts": change.parts}) \
+			messages[0].content = sys + "\n\n=== CHANGE THE PLAYER'S GAME ===\nHere is my current game as JSON:\n" + JSON.stringify({"title": change.title, "sky": change.sky, "spawn": change.spawn, "goal": change.goal, "parts": change.parts}) \
 				+ "\n\nChange it like this: " + prompt \
 				+ "\nChange ONLY what I asked. Keep every other part exactly as it is (same kind, position, size, rotation and colour), keep the title unless I asked to rename it, and keep it finishable. " \
 				+ "In the plan, list just the changes you made. Reply with the whole updated game in the same JSON format, JSON only."
@@ -1132,11 +1134,16 @@ func _ai_try(url: String, model: String, key: String, messages: Array, test: boo
 	add_child(http)
 	var tokens := 400 if test else cfg.i("ai_max_tokens")
 	var body := {"model": model, "messages": messages, "max_tokens": tokens, "temperature": 0.4 if int(st.try) > 1 else 0.7, "stream": false}
+	if not st.get("plain", false):
+		# Thinking models spent the whole budget thinking and wrote nothing; ask them to think less.
+		body["reasoning_effort"] = "low"
+	else:
+		body = {"model": model, "messages": messages, "max_tokens": mini(tokens, 4000)}
 	var headers := PackedStringArray(["Content-Type: application/json", "Accept: application/json", "Authorization: Bearer " + key,
 		"User-Agent: PluxServer/0.7.2", "ngrok-skip-browser-warning: true",
 		"HTTP-Referer: https://github.com/eduzd/blockparty", "X-Title: Plux"])
 	var retry := func(why: String, bad_reply: String) -> bool:
-		if int(st.try) >= 2 or test:
+		if int(st.try) >= 2 or test or Time.get_ticks_msec() - int(st.t0) > 150000:
 			return false
 		print("[ai] try %d failed (%s), trying again" % [int(st.try), why])
 		st.try = 2
@@ -1188,6 +1195,12 @@ func _ai_try(url: String, model: String, key: String, messages: Array, test: boo
 				emsg = "the address answered with a web page, not the AI (" + PloxAi.preview(text, 80) + ")"
 			if code == 404:
 				emsg += ". Check the base URL ends in /v1 (Plux adds /chat/completions)"
+			if code == 400 and not st.get("plain", false):
+				# Maybe the router doesn't know an option (reasoning_effort, a big max_tokens): try plainly.
+				print("[ai] HTTP 400 (%s), trying again with a plain request" % emsg.substr(0, 120))
+				st["plain"] = true
+				_ai_try(url, model, key, messages, test, ag, done, st)
+				return
 			fail.call("HTTP %d: %s" % [code, emsg], "", code == 429 or code >= 500)
 			return
 		var r := PloxAi.reply_text(text)
@@ -1200,7 +1213,7 @@ func _ai_try(url: String, model: String, key: String, messages: Array, test: boo
 			if r.shape == "not JSON":
 				detail = "not an AI reply: " + PloxAi.preview(text, 120)
 			elif r.finish == "length":
-				detail += ": it ran out of tokens before writing anything (raise the token limit or use a non-thinking model)"
+				detail += ": the model spent all its tokens thinking and wrote nothing"
 			fail.call("empty answer (%s)" % detail, "", true)
 			return
 		if test:
@@ -1236,7 +1249,8 @@ func _ai_try(url: String, model: String, key: String, messages: Array, test: boo
 			probs = PloxLevel.quality(level, str(st.prompt), want, allowed)
 		if not probs.is_empty():
 			var fixes := int(st.get("fixes", 0))
-			if fixes < 2:
+			var elapsed := Time.get_ticks_msec() - int(st.t0)
+			if fixes < 2 and (elapsed < 120000 or not st.has("best")):
 				st["fixes"] = fixes + 1
 				print("[ai] level not finishable, asking the AI to fix it (%d): %s" % [fixes + 1, str(probs[0]).substr(0, 160)])
 				var m3: Array = messages.duplicate(true)
