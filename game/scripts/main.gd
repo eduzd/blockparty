@@ -930,6 +930,8 @@ func _autotest_social_setup() -> void:
 		"requests": shell.push({"k": "requests"})
 		"edit": shell.select_tab(3); shell.push({"k": "edit"})
 		"settings": shell.select_tab(3); shell.push({"k": "settings"})
+		"password": shell.select_tab(3); shell.push({"k": "settings"}); shell.push({"k": "password"})
+		"login": shell.select_tab(3); shell.push({"k": "settings"}); shell.push({"k": "login"})
 		"list": shell.push({"k": "list", "uid": social.uid, "kind": "friends"})
 		"user": shell.push({"k": "user", "uid": scr.get_slice(":", 1)})
 		"chat_with": shell.select_tab(2); shell.push({"k": "chat", "uid": scr.get_slice(":", 1)})

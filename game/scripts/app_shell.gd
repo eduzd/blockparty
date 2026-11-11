@@ -73,6 +73,9 @@ func _ready() -> void:
 	social.list_done.connect(_on_list_done)
 	social.profile_saved.connect(_on_profile_saved)
 	social.typing.connect(_on_typing)
+	social.login_done.connect(_on_login_done)
+	social.password_saved.connect(_on_password_saved)
+	social.account_switched.connect(func(): _mark_dirty())
 	resized.connect(_on_resized)
 	call_deferred("_rebuild")
 
@@ -218,6 +221,8 @@ func _show_current(animate: bool, direction := 0) -> void:
 			"chat": node = _chat_screen(str(top.uid))
 			"edit": node = _edit_screen()
 			"settings": node = _settings_screen()
+			"password": node = _password_screen()
+			"login": node = _login_screen()
 			_: node = UiKit.vbox()
 		node.set_anchors_preset(Control.PRESET_FULL_RECT)
 		bg.add_child(node)
@@ -641,9 +646,11 @@ func _profile() -> Control:
 		card[1].add_child(UiKit.setting_row("magnifying-glass", "Find people", "Search by name or @username", "", UiKit.SKY_MEDIUM, func(): push({"k": "search"})))
 		var n: int = social.data.req_in.size()
 		card[1].add_child(UiKit.setting_row("user-plus", "Friend requests", "Received and sent", str(n) if n > 0 else "", UiKit.PINK, func(): push({"k": "requests"})))
-		card[1].add_child(UiKit.setting_row("cog-6-tooth", "Settings", "Theme, sound, screen and server", "", UiKit.INK if not UiKit.dark else UiKit.SKY, func(): push({"k": "settings"})))
-		box.add_child(UiKit.margin(UiKit.label("Your account lives on this phone. Uninstalling the app removes it, friends and chats included.",
-			"body_small", UiKit.c("on_surface_variant")), 20, 14, 20, 0))
+		card[1].add_child(UiKit.setting_row("cog-6-tooth", "Settings", "Account, password, theme, sound and screen", "", UiKit.INK if not UiKit.dark else UiKit.SKY, func(): push({"k": "settings"})))
+		var note := "Your account is saved on the server. You can log in on any phone with @%s and your password." % str(social.data.username)
+		if not social.has_password():
+			note = "Your account is saved on the server. Set a password in Settings so you can log in again after reinstalling or on a new phone."
+		box.add_child(UiKit.margin(UiKit.label(note, "body_small", UiKit.c("on_surface_variant")), 20, 14, 20, 0))
 	)
 	return page[0]
 
@@ -1278,6 +1285,22 @@ func _set_edit_error(t: String) -> void:
 func _settings_screen() -> Control:
 	var page := UiKit.pinned_page("Settings", pop)
 	var content: VBoxContainer = page[1]
+	content.add_child(UiKit.section_title("Account"))
+	var acc: Array = UiKit.card()
+	content.add_child(acc[0])
+	var un := "@" + str(social.data.get("username", ""))
+	var where := "Logged in with your password" if social.is_logged_in() else "This phone's account"
+	acc[1].add_child(UiKit.setting_row("user-circle", un, where, "", UiKit.SKY_MEDIUM, func(): pass))
+	acc[1].add_child(UiKit.setting_row("lock-closed", "Change password" if social.has_password() else "Set a password",
+		"Log in on any phone and keep your account", "", UiKit.INK if not UiKit.dark else UiKit.SKY,
+		func(): push({"k": "password"})))
+	acc[1].add_child(UiKit.setting_row("device-phone-mobile", "Log in to another account", "Use an @username and password", "", UiKit.SKY_MEDIUM,
+		func(): push({"k": "login"})))
+	if social.is_logged_in():
+		acc[1].add_child(UiKit.setting_row("arrow-uturn-left", "Log out", "Go back to this phone's own account", "", UiKit.PINK, func():
+			social.logout()
+			_toast("Logged out")
+			_show_current(false)))
 	content.add_child(UiKit.section_title("Appearance"))
 	var th: Array = UiKit.card()
 	content.add_child(th[0])
@@ -1330,6 +1353,138 @@ func _settings_screen() -> Control:
 	content.add_child(_kb_spacer)
 	content.add_child(UiKit.end_padding())
 	return page[0]
+
+
+# ------------------------------------------------------------------ screens: password and login
+
+var _form_error: Label
+var _form_button: Button
+
+
+func _secret_field(placeholder: String, hint: String = "") -> Array:
+	var f: Array = UiKit.text_field(placeholder, "", SocialHub.MAX_PW, hint)
+	var e: LineEdit = f[1]
+	e.secret = true
+	e.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_PASSWORD
+	return f
+
+
+func _form_tail(content: VBoxContainer, button_text: String, icon_name: String) -> Button:
+	_form_error = UiKit.label("", "body_medium", UiKit.c("error"))
+	var err_box := UiKit.margin(_form_error, 20, 12, 20, 0)
+	err_box.visible = false
+	content.add_child(err_box)
+	_form_button = UiKit.primary_button(button_text, icon_name, Callable())
+	content.add_child(UiKit.margin(_form_button, 16, 16, 16, 0))
+	_kb_spacer = UiKit.vspace(bottom_inset)
+	content.add_child(_kb_spacer)
+	content.add_child(UiKit.end_padding())
+	return _form_button
+
+
+func _set_form_error(t: String) -> void:
+	if _form_error and is_instance_valid(_form_error):
+		_form_error.text = t
+		_form_error.get_parent().visible = t != ""
+	if _form_button and is_instance_valid(_form_button):
+		_form_button.disabled = false
+
+
+func _password_screen() -> Control:
+	var changing := social.has_password()
+	var page := UiKit.pinned_page("Change password" if changing else "Set a password", pop)
+	var content: VBoxContainer = page[1]
+	var intro := UiKit.label("With a password you can log in as @%s on another phone, or after reinstalling the app. Your friends, follows and chats come with you." % str(social.data.username),
+		"body_medium", UiKit.c("on_surface_variant"))
+	content.add_child(UiKit.margin(intro, 20, 16, 20, 8))
+	var old_f: LineEdit = null
+	if changing:
+		content.add_child(UiKit.section_title("Current password"))
+		var of: Array = _secret_field("Current password")
+		old_f = of[1]
+		content.add_child(of[0])
+	content.add_child(UiKit.section_title("New password"))
+	var nf: Array = _secret_field("New password", "At least %d characters" % SocialHub.MIN_PW)
+	var new_f: LineEdit = nf[1]
+	content.add_child(nf[0])
+	content.add_child(UiKit.section_title("Type it again"))
+	var rf: Array = _secret_field("New password again")
+	var rep_f: LineEdit = rf[1]
+	content.add_child(rf[0])
+	var btn := _form_tail(content, "Save password", "lock-closed")
+	btn.pressed.connect(func():
+		if new_f.text.length() < SocialHub.MIN_PW:
+			_set_form_error("Your password needs at least %d characters." % SocialHub.MIN_PW)
+			return
+		if new_f.text != rep_f.text:
+			_set_form_error("The two passwords don't match.")
+			return
+		_set_form_error("")
+		if not social.set_password(new_f.text, old_f.text if old_f else ""):
+			_set_form_error("You're offline. Try again when you're connected.")
+			return
+		btn.disabled = true)
+	return page[0]
+
+
+func _on_password_saved(ok: bool, why: String) -> void:
+	var top: Dictionary = state.stack[state.stack.size() - 1] if not state.stack.is_empty() else {}
+	if str(top.get("k", "")) != "password":
+		return
+	if ok:
+		pop()
+		_toast("Password saved. Log in as @%s on any phone." % str(social.data.username))
+		return
+	match why:
+		"old_wrong": _set_form_error("Your current password is wrong.")
+		"no_username": _set_form_error("Pick a username first, in Edit profile.")
+		_: _set_form_error("Your password needs at least %d characters." % SocialHub.MIN_PW)
+
+
+func _login_screen() -> Control:
+	var page := UiKit.pinned_page("Log in", pop)
+	var content: VBoxContainer = page[1]
+	var intro := UiKit.label("Log in to an account that has a password. This phone's own account stays saved, and Log out in Settings brings it back.",
+		"body_medium", UiKit.c("on_surface_variant"))
+	content.add_child(UiKit.margin(intro, 20, 16, 20, 8))
+	content.add_child(UiKit.section_title("Username"))
+	var uf: Array = UiKit.text_field("username", "", 21, "")
+	var user_f: LineEdit = uf[1]
+	user_f.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_DEFAULT
+	content.add_child(uf[0])
+	content.add_child(UiKit.section_title("Password"))
+	var pf: Array = _secret_field("Password")
+	var pw_f: LineEdit = pf[1]
+	content.add_child(pf[0])
+	var btn := _form_tail(content, "Log in", "check")
+	var go := func():
+		var un := SocialHub.clean_username(user_f.text.strip_edges().trim_prefix("@"))
+		if un.length() < 3 or pw_f.text == "":
+			_set_form_error("Type the username and the password.")
+			return
+		_set_form_error("")
+		btn.disabled = true
+		btn.text = "Logging in..."
+		social.login(un, pw_f.text)
+	btn.pressed.connect(go)
+	pw_f.text_submitted.connect(func(_t): go.call())
+	return page[0]
+
+
+func _on_login_done(ok: bool, why: String) -> void:
+	var top: Dictionary = state.stack[state.stack.size() - 1] if not state.stack.is_empty() else {}
+	if str(top.get("k", "")) != "login":
+		return
+	if ok:
+		select_tab(3)
+		_toast("Logged in as @%s" % str(social.data.username))
+		return
+	if _form_button and is_instance_valid(_form_button):
+		_form_button.text = "Log in"
+	match why:
+		"slow": _set_form_error("Too many tries. Wait a few minutes and try again.")
+		"offline": _set_form_error("Couldn't reach the server. The free server may be waking up, so try again in a minute.")
+		_: _set_form_error("That username and password don't match.")
 
 
 # ------------------------------------------------------------------ notices

@@ -25,12 +25,29 @@ var _next_id := 1
 var _snap_accum := 0.0
 ## Profiles, friends, follows and chat (see SocialHub). Same port as the game.
 var social: SocialHub
+## Permanent storage for the social layer, when NEON_DATABASE_URL is set (Render).
+var store: NeonStore
+var _store_wait_since := 0
+const STORE_GIVE_UP_MS := 45000
 
 
 func start(p_port: int, bind_address: String = "*") -> Error:
 	social = SocialHub.new(func(cid: int, data: Dictionary):
 		if _clients.has(cid):
 			_send(_clients[cid], data), _log)
+	if OS.has_environment("NEON_DATABASE_URL") and OS.get_environment("NEON_DATABASE_URL") != "":
+		store = NeonStore.new()
+		add_child(store)
+		if store.setup(OS.get_environment("NEON_DATABASE_URL"), _log):
+			social.attach_store(store)
+			store.loaded.connect(func(data: Dictionary):
+				social.load_from(data)
+				_release_held())
+			_store_wait_since = Time.get_ticks_msec()
+			store.start_load()
+		else:
+			store.queue_free()
+			store = null
 	if OS.has_environment("VOICE_ICE_SERVERS"):
 		var parsed = JSON.parse_string(OS.get_environment("VOICE_ICE_SERVERS"))
 		if parsed is Array:
@@ -76,6 +93,11 @@ func _process(delta: float) -> void:
 	_poll_pending(now)
 	_poll_clients(now)
 	_poll_closing(now)
+	if store != null and store.enabled and not store.is_loaded and now - _store_wait_since > STORE_GIVE_UP_MS:
+		# The database never answered: carry on in memory so nobody is locked out.
+		_log("storage: database not reachable, running in memory only")
+		store.enabled = false
+		_release_held()
 	_clock += delta
 	for room in _rooms.keys():
 		_update_wind(room, delta)
@@ -147,7 +169,8 @@ func _poll_clients(now: int) -> void:
 			_handle_packet(c, pkt, ws.was_string_packet(), now)
 		if not _clients.has(id):
 			continue
-		if c.room == "" and not bool(c.get("social", false)) and now - int(c.joined_at) > Protocol.HELLO_TIMEOUT_MS:
+		if c.room == "" and not bool(c.get("social", false)) and not c.has("held") \
+				and now - int(c.joined_at) > Protocol.HELLO_TIMEOUT_MS:
 			_kick(id, "hello_timeout", "No hello received")
 		elif now - int(c.last_msg) > Protocol.IDLE_TIMEOUT_MS:
 			_kick(id, "idle", "Timed out")
@@ -219,8 +242,49 @@ func _handle_packet(c: Dictionary, pkt: PackedByteArray, is_text: bool, now: int
 # A social connection never joins a room: it says s_hello instead of hello and then
 # only sends s_* messages (and pings) while the app is open.
 
+func _store_waiting() -> bool:
+	return store != null and store.enabled and not store.is_loaded
+
+
+## Sign-ins that arrived while the database was still loading go through now.
+func _release_held() -> void:
+	for id in _clients.keys():
+		if not _clients.has(id) or not _clients[id].has("held"):
+			continue
+		var c: Dictionary = _clients[id]
+		var held: Array = c.held
+		c.erase("held")
+		c.joined_at = Time.get_ticks_msec()
+		for m in held:
+			if _clients.has(id):
+				_on_social(c, m)
+
+
 func _on_social(c: Dictionary, msg: Dictionary) -> void:
 	var unix := int(Time.get_unix_time_from_system())
+	if (msg.t == "s_hello" or msg.t == "s_login") and _store_waiting() and not bool(c.get("social", false)):
+		# Hold sign-ins until the accounts are loaded from the database.
+		var held: Array = c.get("held", [])
+		if held.size() >= 3:
+			_bad(c, "busy")
+			return
+		held.append(msg)
+		c.held = held
+		return
+	if msg.t == "s_login":
+		if c.room != "" or bool(c.get("social", false)):
+			_bad(c, "already_joined")
+			return
+		c.login_tries = int(c.get("login_tries", 0)) + 1
+		if c.login_tries > 5:
+			_kick(c.id, "rate_limit", "Too many tries")
+			return
+		var res := social.on_login(msg, unix)
+		if msg.has("rid"):
+			res["rid"] = msg.rid
+		_send(c, res)
+		c.joined_at = Time.get_ticks_msec()
+		return
 	if msg.t == "s_hello":
 		if c.room != "" or bool(c.get("social", false)):
 			_bad(c, "already_joined")

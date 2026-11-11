@@ -3,18 +3,24 @@ extends RefCounted
 ## Server side of the social layer: profiles, search, follows, friend requests,
 ## friends and one-to-one chat. Lives inside the referee (same port, same process).
 ##
-## Storage model (free Render instances lose their disk when they sleep):
-## every phone keeps its own account, friends, follows, sent requests and chat
-## history, and re-sends them in s_hello each time it connects. The hub keeps the
-## combined picture in memory, so after a server restart it rebuilds itself as
-## people come back online. Only things that live on nobody's phone are lost on
-## a restart: messages still waiting for an offline friend whose sender has not
-## reconnected, and counts from people who have not opened the app since.
+## Storage model: the hub keeps everything in memory and, on the Render server,
+## writes every change to the Neon database (NeonStore) and loads it back after
+## a restart. Accounts in the database are the truth; phones no longer re-seed
+## them. Without a database (a phone hosting a game) it falls back to the old
+## model: every phone re-sends its account, friends, follows and sent requests in
+## s_hello, and the hub rebuilds the combined picture as people come back online.
 
 const MAX_LIST := 300
 const MAX_TEXT := 500
 const MAX_QUEUE := 200
 const MAX_RESULTS := 30
+const MAX_HISTORY := 200
+## Bytes of chat history sent to a phone that just logged in.
+const SYNC_BUDGET := 40000
+const MAX_PW := 64
+const MIN_PW := 6
+## Rounds of HMAC-SHA256 key stretching for stored passwords.
+const PW_ROUNDS := 3000
 
 var users := {}       # uid -> {uid, name, username, bio, cid, last_seen, seeded}
 var follows := {}     # uid -> {uid: true}   (who uid follows)
@@ -23,6 +29,11 @@ var requests := {}    # to_uid -> {from_uid: true}
 var queue := {}       # to_uid -> [msg]
 var inflight := {}    # to_uid -> {mid: msg}  sent to a live socket, not yet confirmed (s_got)
 var by_cid := {}      # connection id -> uid
+var cid_th := {}      # connection id -> session token hash (logged-in phones)
+var sessions := {}    # token hash -> uid
+var history := {}     # "uidA:uidB" -> [{mid, from, text, ts}] (latest MAX_HISTORY)
+var login_fails := {} # username -> [count, since_unix]
+var store: NeonStore = null
 var _send: Callable   # (cid, Dictionary) -> void
 var _log: Callable
 
@@ -172,79 +183,152 @@ func _notify_friends_presence(uid: String) -> void:
 # ------------------------------------------------------------------ connection
 
 ## Returns an error code or "" when the hello was accepted.
+## Returns an error code or "" when the hello was accepted.
+## A phone signs in with its device key (the account made on that phone) or with a
+## session token it got from s_login (an account it logged in to with a password).
 func on_hello(cid: int, msg: Dictionary, now_unix: int) -> String:
-	var key = msg.get("key")
-	if not (key is String) or key.length() < 32 or key.length() > 128:
-		return "bad_key"
-	var uid := uid_for_key(key)
+	var uid := ""
+	var th := ""
+	var token = msg.get("token")
+	if token is String and token != "":
+		if token.length() < 32 or token.length() > 128:
+			return "bad_token"
+		th = token.sha256_text()
+		if not sessions.has(th):
+			return "logged_out"
+		uid = sessions[th]
+	else:
+		var key = msg.get("key")
+		if not (key is String) or key.length() < 32 or key.length() > 128:
+			return "bad_key"
+		uid = uid_for_key(key)
 	# One live connection per account: the newest wins.
 	if _online(uid):
 		var old := int(users[uid].cid)
 		by_cid.erase(old)
+		cid_th.erase(old)
 		_requeue_inflight(uid)
 		_send.call(old, {"t": "error", "code": "signed_in_elsewhere", "msg": "Signed in on another phone", "fatal": true})
+	var persisted: bool = bool(users.get(uid, {}).get("persisted", false))
 	var u: Dictionary = users.get(uid, {"uid": uid})
-	u.name = Protocol.sanitize_name(msg.get("name"))
-	u.bio = clean_text(msg.get("bio"), 150)
-	u.av = clean_av(msg.get("av"))
-	var want := clean_username(msg.get("username"))
-	u.username = _unique_username(want, uid)
+	# The phone sends its profile when it has changes the server has not seen (older
+	# app versions always send it). A phone that just logged in sends none and gets
+	# the profile from the welcome.
+	if msg.has("name") or not u.has("name"):
+		u.name = Protocol.sanitize_name(msg.get("name"))
+		u.bio = clean_text(msg.get("bio"), 150)
+		u.av = clean_av(msg.get("av"))
+		var want := clean_username(msg.get("username"))
+		if want != str(u.get("username", "")) or want == "":
+			u.username = _unique_username(want, uid)
 	u.cid = cid
 	u.last_seen = now_unix
 	u.seeded = true
 	users[uid] = u
 	by_cid[cid] = uid
+	if th != "":
+		cid_th[cid] = th
 
-	# Re-seed from the phone: who I follow, who my friends are, who I asked.
-	var my_follows := {}
-	for x in _uids(msg.get("follows")):
-		if x != uid:
-			my_follows[x] = true
-			_ensure_stub(x)
-	follows[uid] = my_follows
-	var claimed := _uids(msg.get("friends"))
 	var mine := _bucket(friends, uid)
-	for x in mine.keys():
-		if not claimed.has(x):
-			# I removed them while the server wasn't looking.
-			mine.erase(x)
-			if friends.has(x):
-				friends[x].erase(uid)
-	for x in claimed:
-		if x == uid:
-			continue
-		_ensure_stub(x)
-		# Trust the claim unless the other side has told us otherwise since the restart.
-		if bool(users[x].get("seeded", false)) and not friends.get(x, {}).has(uid):
-			continue
-		mine[x] = true
-		_bucket(friends, x)[uid] = true
-	for x in _uids(msg.get("req_out")):
-		if x != uid and not mine.has(x):
+	var my_follows := _bucket(follows, uid)
+	if not persisted:
+		# Re-seed from the phone: who I follow, who my friends are, who I asked.
+		# Accounts already in the database skip this: the server's copy is the truth.
+		var new_follows := {}
+		for x in _uids(msg.get("follows")):
+			if x != uid:
+				new_follows[x] = true
+				_ensure_stub(x)
+		for x in my_follows:
+			if not new_follows.has(x):
+				_db("delete from bp_follows where a = $1 and b = $2", [uid, x])
+		for x in new_follows:
+			if not my_follows.has(x):
+				_db("insert into bp_follows (a, b) values ($1, $2) on conflict do nothing", [uid, x])
+		follows[uid] = new_follows
+		my_follows = new_follows
+		var claimed := _uids(msg.get("friends"))
+		for x in mine.keys():
+			if not claimed.has(x):
+				# I removed them while the server wasn't looking.
+				mine.erase(x)
+				if friends.has(x):
+					friends[x].erase(uid)
+				_db_friend(uid, x, false)
+		for x in claimed:
+			if x == uid:
+				continue
 			_ensure_stub(x)
-			_bucket(requests, x)[uid] = true
-	# Requests addressed to me that I no longer list as pending are kept: the
-	# requester's phone re-sends them, and I answer them in the app.
+			# Trust the claim unless the other side has told us otherwise since the restart.
+			if bool(users[x].get("seeded", false)) and not friends.get(x, {}).has(uid):
+				continue
+			if not mine.has(x):
+				_db_friend(uid, x, true)
+			mine[x] = true
+			_bucket(friends, x)[uid] = true
+		for x in _uids(msg.get("req_out")):
+			if x != uid and not mine.has(x):
+				_ensure_stub(x)
+				if not requests.get(x, {}).has(uid):
+					_db("insert into bp_requests (to_uid, from_uid) values ($1, $2) on conflict do nothing", [x, uid])
+				_bucket(requests, x)[uid] = true
+		# Requests addressed to me that I no longer list as pending are kept: the
+		# requester's phone re-sends them, and I answer them in the app.
+	_save_user(uid)
 
 	var in_req := []
 	for from in requests.get(uid, {}):
 		if not mine.has(from):
 			in_req.append(card(from, uid))
+	var out_req := []
+	for to in requests:
+		if requests[to].has(uid) and not mine.has(to):
+			out_req.append(_small(to))
 	var friend_cards := []
 	for f in mine:
 		friend_cards.append(card(f, uid))
 	var following_cards := []
 	for f in my_follows:
 		following_cards.append(_small(f))
-	_send.call(cid, {"t": "s_welcome", "me": card(uid), "req_in": in_req, "friends": friend_cards,
-		"following": following_cards, "server_time": now_unix})
+	var me := card(uid)
+	me["av"] = int(u.get("av", -1))
+	me["has_pw"] = str(u.get("pw", "")) != ""
+	var welcome := {"t": "s_welcome", "me": me, "req_in": in_req, "req_out": out_req, "friends": friend_cards,
+		"following": following_cards, "server_time": now_unix, "stored": store != null and store.writable}
+	if bool(msg.get("sync", false)):
+		# A phone that just logged in gets its recent chats back.
+		# Newest chats first, within a size budget so the welcome stays one small message.
+		var pairs := []
+		for pair in history:
+			var ab: PackedStringArray = pair.split(":")
+			if ab.size() == 2 and (ab[0] == uid or ab[1] == uid) and not history[pair].is_empty():
+				pairs.append(pair)
+		pairs.sort_custom(func(a, b): return int(history[a][-1].ts) > int(history[b][-1].ts))
+		var chats := {}
+		var budget := SYNC_BUDGET
+		for pair in pairs:
+			var ab: PackedStringArray = pair.split(":")
+			var other: String = ab[1] if ab[0] == uid else ab[0]
+			var msgs := _history_out(pair, 30)
+			var keep := []
+			for i in range(msgs.size() - 1, -1, -1):
+				var cost: int = str(msgs[i].text).to_utf8_buffer().size() + 90
+				if cost > budget:
+					break
+				budget -= cost
+				keep.push_front(msgs[i])
+			if keep.is_empty():
+				break
+			chats[other] = keep
+		welcome["chats"] = chats
+	_send.call(cid, welcome)
 	# Messages that waited for me.
 	var waiting: Array = queue.get(uid, [])
 	queue.erase(uid)
 	for m in waiting:
 		_deliver(uid, m)
 	_notify_friends_presence(uid)
-	_log.call("social: @%s online (%d friends, %d following)" % [u.username, mine.size(), my_follows.size()])
+	_log.call("social: @%s online (%d friends, %d following)%s" % [u.username, mine.size(), my_follows.size(), " [login]" if th != "" else ""])
 	return ""
 
 
@@ -258,11 +342,159 @@ func on_disconnect(cid: int, now_unix: int) -> void:
 		return
 	var uid: String = by_cid[cid]
 	by_cid.erase(cid)
+	cid_th.erase(cid)
 	if users.has(uid) and int(users[uid].cid) == cid:
 		_requeue_inflight(uid)
 		users[uid].cid = -1
 		users[uid].last_seen = now_unix
+		if bool(users[uid].get("persisted", false)):
+			_db("update bp_users set last_seen = $2 where uid = $1", [uid, now_unix])
 		_notify_friends_presence(uid)
+
+
+# ------------------------------------------------------------------ storage
+
+## Hands the hub a database to write to (see NeonStore). Without one, the hub
+## works in memory only, as it does when a phone hosts the game.
+func attach_store(s: NeonStore) -> void:
+	store = s
+
+
+func _db(query: String, params: Array) -> void:
+	if store != null:
+		store.exec(query, params)
+
+
+func _save_user(uid: String) -> void:
+	if store == null or not store.writable or not users.has(uid):
+		return
+	var u: Dictionary = users[uid]
+	_db("insert into bp_users (uid, name, username, bio, av, last_seen, pw, created) values ($1, $2, $3, $4, $5, $6, $7, $8) on conflict (uid) do update set name = excluded.name, username = excluded.username, bio = excluded.bio, av = excluded.av, last_seen = excluded.last_seen, pw = excluded.pw",
+		[uid, str(u.get("name", "Player")), str(u.get("username", "")), str(u.get("bio", "")), int(u.get("av", -1)),
+		int(u.get("last_seen", 0)), u.get("pw") if str(u.get("pw", "")) != "" else null, int(Time.get_unix_time_from_system())])
+	u.persisted = true
+
+
+func _db_friend(a: String, b: String, on: bool) -> void:
+	if on:
+		_db("insert into bp_friends (a, b) values ($1, $2), ($2, $1) on conflict do nothing", [a, b])
+	else:
+		_db("delete from bp_friends where (a = $1 and b = $2) or (a = $2 and b = $1)", [a, b])
+
+
+static func pair_key(a: String, b: String) -> String:
+	return a + ":" + b if a < b else b + ":" + a
+
+
+func _remember(m: Dictionary, to: String) -> bool:
+	var pair := pair_key(str(m.from), to)
+	var h: Array = history.get(pair, [])
+	for x in h:
+		if x.mid == m.mid:
+			return false
+	h.append({"mid": m.mid, "from": m.from, "text": m.text, "ts": int(m.ts)})
+	if h.size() > MAX_HISTORY:
+		h = h.slice(h.size() - MAX_HISTORY)
+	history[pair] = h
+	return true
+
+
+func _history_out(pair: String, n: int) -> Array:
+	var h: Array = history.get(pair, [])
+	return h.slice(maxi(0, h.size() - n))
+
+
+## Fills the hub from the database at start-up (rows from NeonStore.loaded).
+func load_from(data: Dictionary) -> void:
+	for r in data.get("users", []):
+		var uid := str(r.get("uid", ""))
+		if not valid_uid(uid):
+			continue
+		var u: Dictionary = users.get(uid, {"uid": uid, "cid": -1})
+		u.name = str(r.get("name", "Player"))
+		u.username = str(r.get("username", ""))
+		u.bio = str(r.get("bio", ""))
+		u.av = clean_av(r.get("av"))
+		u.last_seen = int(str(r.get("last_seen", "0")))
+		u.pw = str(r.get("pw")) if r.get("pw") != null else ""
+		u.seeded = true
+		u.persisted = true
+		if not u.has("cid"):
+			u.cid = -1
+		users[uid] = u
+	for r in data.get("follows", []):
+		_bucket(follows, str(r.a))[str(r.b)] = true
+	for r in data.get("friends", []):
+		_bucket(friends, str(r.a))[str(r.b)] = true
+	for r in data.get("requests", []):
+		_bucket(requests, str(r.to_uid))[str(r.from_uid)] = true
+	for r in data.get("msgs", []):
+		var from := str(r.from_uid)
+		var to := str(r.to_uid)
+		var m := {"mid": str(r.mid), "from": from, "text": str(r.text), "ts": int(str(r.ts))}
+		_remember(m, to)
+		var delivered = r.get("delivered")
+		if delivered == false or str(delivered) == "false" or str(delivered) == "f":
+			var out := {"t": "s_msg", "from": from, "mid": m.mid, "text": m.text, "ts": m.ts,
+				"name": users.get(from, {}).get("name", "Player")}
+			_enqueue(to, out)
+	for r in data.get("sessions", []):
+		sessions[str(r.th)] = str(r.uid)
+	for uid in users:
+		if not users[uid].has("cid"):
+			users[uid].cid = -1
+
+
+# ------------------------------------------------------------------ passwords and login
+
+static func hash_pw(pw: String, salt_hex := "", rounds := PW_ROUNDS) -> String:
+	var c := Crypto.new()
+	if salt_hex == "":
+		salt_hex = c.generate_random_bytes(16).hex_encode()
+	var key := pw.to_utf8_buffer()
+	var h := c.hmac_digest(HashingContext.HASH_SHA256, key, salt_hex.hex_decode())
+	for i in rounds:
+		h = c.hmac_digest(HashingContext.HASH_SHA256, key, h)
+	return "h1$%d$%s$%s" % [rounds, salt_hex, h.hex_encode()]
+
+
+static func check_pw(pw: String, stored: String) -> bool:
+	var parts := stored.split("$")
+	if parts.size() != 4 or parts[0] != "h1" or int(parts[1]) < 1:
+		return false
+	return hash_pw(pw, parts[2], int(parts[1])) == stored
+
+
+## Logs in with @username and password. Works before s_hello, on the same
+## connection; the phone then says s_hello with the token it gets back.
+func on_login(msg: Dictionary, now_unix: int) -> Dictionary:
+	var un := clean_username(str(msg.get("username", "")).strip_edges().trim_prefix("@"))
+	var pw = msg.get("password")
+	if un.length() < 3 or not (pw is String) or pw.length() < 1 or pw.length() > MAX_PW:
+		return {"t": "s_login_res", "ok": false, "why": "wrong"}
+	var f: Array = login_fails.get(un, [0, now_unix])
+	if now_unix - int(f[1]) > 300:
+		f = [0, now_unix]
+	if int(f[0]) >= 6:
+		return {"t": "s_login_res", "ok": false, "why": "slow"}
+	var uid := ""
+	for x in users:
+		if str(users[x].get("username", "")) == un:
+			uid = x
+			break
+	if uid == "" or str(users[uid].get("pw", "")) == "" or not check_pw(pw, str(users[uid].pw)):
+		f[0] = int(f[0]) + 1
+		login_fails[un] = f
+		return {"t": "s_login_res", "ok": false, "why": "wrong"}
+	login_fails.erase(un)
+	var token := Crypto.new().generate_random_bytes(24).hex_encode()
+	var th := token.sha256_text()
+	sessions[th] = uid
+	_db("insert into bp_sessions (th, uid, created) values ($1, $2, $3) on conflict do nothing", [th, uid, now_unix])
+	_log.call("social: @%s logged in" % un)
+	var me := card(uid)
+	me["av"] = int(users[uid].get("av", -1))
+	return {"t": "s_login_res", "ok": true, "token": token, "uid": uid, "me": me}
 
 
 func is_signed_in(cid: int) -> bool:
@@ -287,12 +519,14 @@ func handle(cid: int, msg: Dictionary, now_unix: int) -> String:
 			u.av = clean_av(msg.get("av"))
 			var want := clean_username(msg.get("username"))
 			if want.length() < 3:
+				_save_user(me)
 				_send.call(cid, {"t": "s_profile_res", "rid": rid, "ok": false, "why": "short", "me": card(me)})
 				return ""
 			var got := _unique_username(want, me)
 			var ok := got == want
 			if ok:
 				u.username = want
+			_save_user(me)
 			_send.call(cid, {"t": "s_profile_res", "rid": rid, "ok": ok, "why": "" if ok else "taken", "me": card(me)})
 		"s_search":
 			var q := clean_text(msg.get("q"), 30).to_lower().trim_prefix("@")
@@ -355,8 +589,12 @@ func handle(cid: int, msg: Dictionary, now_unix: int) -> String:
 			var was: bool = mine.has(uid)
 			if on:
 				mine[uid] = true
+				if not was:
+					_db("insert into bp_follows (a, b) values ($1, $2) on conflict do nothing", [me, uid])
 			else:
 				mine.erase(uid)
+				if was:
+					_db("delete from bp_follows where a = $1 and b = $2", [me, uid])
 			_send.call(cid, {"t": "s_user", "rid": rid, "uid": uid, "user": card(uid, me)})
 			if on and not was:
 				_push(uid, {"t": "s_notice", "kind": "follow", "from": card(me, uid)})
@@ -372,6 +610,7 @@ func handle(cid: int, msg: Dictionary, now_unix: int) -> String:
 				var was: bool = requests.get(uid, {}).has(me)
 				_bucket(requests, uid)[me] = true
 				if not was:
+					_db("insert into bp_requests (to_uid, from_uid) values ($1, $2) on conflict do nothing", [uid, me])
 					_push(uid, {"t": "s_notice", "kind": "request", "from": card(me, uid)})
 			_send.call(cid, {"t": "s_user", "rid": rid, "uid": uid, "user": card(uid, me)})
 		"s_faccept":
@@ -388,10 +627,12 @@ func handle(cid: int, msg: Dictionary, now_unix: int) -> String:
 			if msg.t == "s_fdecline":
 				if requests.has(me):
 					requests[me].erase(uid)
+				_db("delete from bp_requests where to_uid = $1 and from_uid = $2", [me, uid])
 				_push(uid, {"t": "s_notice", "kind": "declined", "from": _small(me)})
 			else:
 				if requests.has(uid):
 					requests[uid].erase(me)
+				_db("delete from bp_requests where to_uid = $1 and from_uid = $2", [uid, me])
 				_push(uid, {"t": "s_notice", "kind": "cancelled", "from": _small(me)})
 			_send.call(cid, {"t": "s_user", "rid": rid, "uid": uid, "user": card(uid, me)})
 		"s_funfriend":
@@ -402,6 +643,7 @@ func handle(cid: int, msg: Dictionary, now_unix: int) -> String:
 				friends[me].erase(uid)
 			if friends.has(uid):
 				friends[uid].erase(me)
+			_db_friend(me, uid, false)
 			_push(uid, {"t": "s_notice", "kind": "unfriended", "from": _small(me)})
 			_send.call(cid, {"t": "s_user", "rid": rid, "uid": uid, "user": card(uid, me)})
 		"s_msg":
@@ -419,6 +661,9 @@ func handle(cid: int, msg: Dictionary, now_unix: int) -> String:
 			# "queued" = the server has it. "delivered" comes when the friend's phone
 			# confirms it (s_got); until then it is resent if their connection drops.
 			_send.call(cid, {"t": "s_ack", "mid": mid, "to": to, "state": "queued"})
+			if _remember(out, to):
+				_db("insert into bp_msgs (mid, from_uid, to_uid, text, ts) values ($1, $2, $3, $4, $5) on conflict do nothing",
+					[mid, me, to, text, int(out.ts)])
 			if _online(to):
 				_deliver(to, out)
 			else:
@@ -428,6 +673,7 @@ func handle(cid: int, msg: Dictionary, now_unix: int) -> String:
 			if mid is String and inflight.has(me) and inflight[me].has(mid):
 				var m: Dictionary = inflight[me][mid]
 				inflight[me].erase(mid)
+				_db("update bp_msgs set delivered = true where mid = $1", [mid])
 				_push(str(m.from), {"t": "s_ack", "mid": mid, "to": me, "state": "delivered"})
 		"s_typing":
 			var to = msg.get("to")
@@ -437,6 +683,37 @@ func handle(cid: int, msg: Dictionary, now_unix: int) -> String:
 			var to = msg.get("to")
 			if valid_uid(to) and friends.get(me, {}).has(to):
 				_push(to, {"t": "s_read", "from": me, "ts": now_unix})
+		"s_setpw":
+			# Sets or changes the password that lets this account log in on another phone.
+			var u: Dictionary = users[me]
+			var pw = msg.get("password")
+			var old_pw = msg.get("old")
+			var res := {"t": "s_setpw_res", "rid": rid, "ok": false, "why": ""}
+			if str(u.get("pw", "")) != "" and not (old_pw is String and check_pw(old_pw, str(u.pw))):
+				res.why = "old_wrong"
+			elif not (pw is String) or pw.length() < MIN_PW or pw.length() > MAX_PW:
+				res.why = "short"
+			elif str(u.get("username", "")).length() < 3:
+				res.why = "no_username"
+			else:
+				u.pw = hash_pw(pw)
+				_save_user(me)
+				res.ok = true
+				res["stored"] = store != null and store.writable
+				_log.call("social: @%s set a password" % u.username)
+			_send.call(cid, res)
+		"s_history":
+			var w = msg.get("with")
+			if not valid_uid(w) or w == me:
+				return "bad_uid"
+			_send.call(cid, {"t": "s_history_res", "rid": rid, "with": w, "msgs": _history_out(pair_key(me, w), 100)})
+		"s_logout":
+			if cid_th.has(cid):
+				var th: String = cid_th[cid]
+				sessions.erase(th)
+				cid_th.erase(cid)
+				_db("delete from bp_sessions where th = $1", [th])
+			_send.call(cid, {"t": "s_logout_res", "rid": rid})
 		_:
 			return "unknown_type"
 	return ""
@@ -445,6 +722,8 @@ func handle(cid: int, msg: Dictionary, now_unix: int) -> String:
 func _make_friends(a: String, b: String) -> void:
 	_bucket(friends, a)[b] = true
 	_bucket(friends, b)[a] = true
+	_db_friend(a, b, true)
+	_db("delete from bp_requests where (to_uid = $1 and from_uid = $2) or (to_uid = $2 and from_uid = $1)", [a, b])
 	if requests.has(a):
 		requests[a].erase(b)
 	if requests.has(b):

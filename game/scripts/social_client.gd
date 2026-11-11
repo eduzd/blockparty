@@ -14,12 +14,17 @@ signal search_done(q: String, users: Array)
 signal list_done(uid: String, kind: String, users: Array)
 signal profile_saved(ok: bool, why: String)
 signal typing(uid: String)
+signal login_done(ok: bool, why: String)        # after login(): ok, or why it failed
+signal password_saved(ok: bool, why: String)
+signal account_switched                         # logged in, logged out or the login expired
 
 const STORE_PATH := "user://social.json"
 const PING_EVERY_MS := 5000
 const SILENCE_MS := 16000
 const CONNECT_TIMEOUT_MS := 25000
 const MAX_CHAT := 400
+## The phone's own account is kept here while it is logged in to another one.
+const DEVICE_PATH := "user://social_device.json"
 
 var state := "offline"
 var url := ""
@@ -38,6 +43,9 @@ var _save_at := 0
 var _rid := 0
 var _search_rid := 0
 var _hello_sent := false
+var _login_ws: WebSocketPeer
+var _login_msg := {}
+var _login_at := 0
 
 
 func _ready() -> void:
@@ -57,7 +65,11 @@ func _load() -> void:
 			data[k] = {}
 	if not (data.get("key") is String) or str(data.key).length() < 32:
 		data.key = Crypto.new().generate_random_bytes(24).hex_encode()
-	uid = SocialHub.uid_for_key(data.key)
+	if is_logged_in() and SocialHub.valid_uid(data.get("login_uid")):
+		uid = str(data.login_uid)
+	else:
+		data.erase("token")
+		uid = SocialHub.uid_for_key(data.key)
 	for k in ["name", "username", "bio"]:
 		if not (data.get(k) is String):
 			data[k] = ""
@@ -174,6 +186,8 @@ func _process(_delta: float) -> void:
 	var now := Time.get_ticks_msec()
 	if _save_at != 0 and now >= _save_at:
 		_save_now()
+	if _login_ws != null:
+		_poll_login(now)
 	if _ws == null:
 		if _retry_at != 0 and now >= _retry_at and state != "elsewhere" and url != "":
 			_retry_at = 0
@@ -216,10 +230,180 @@ func _process(_delta: float) -> void:
 
 
 func _send_hello() -> void:
-	var hello := {"t": "s_hello", "v": Protocol.VERSION, "key": data.key, "name": data.name,
-		"username": data.username, "bio": data.bio, "av": data.av, "friends": data.friends.keys(),
-		"follows": data.following.keys(), "req_out": data.req_out.keys()}
+	var hello := {}
+	if is_logged_in():
+		# An account this phone logged in to: the server holds it, so send no profile.
+		hello = {"t": "s_hello", "v": Protocol.VERSION, "token": data.token, "sync": bool(data.get("need_sync", false))}
+	else:
+		hello = {"t": "s_hello", "v": Protocol.VERSION, "key": data.key, "name": data.name,
+			"username": data.username, "bio": data.bio, "av": data.av, "friends": data.friends.keys(),
+			"follows": data.following.keys(), "req_out": data.req_out.keys()}
 	_ws.send_text(JSON.stringify(hello))
+
+
+# ------------------------------------------------------------------ login
+
+## True when this phone is signed in to an account with a password (not its own).
+func is_logged_in() -> bool:
+	return data.get("token") is String and str(data.token).length() >= 32
+
+
+## True when the account has a password, so it can be logged in to elsewhere.
+func has_password() -> bool:
+	return bool(data.get("me", {}).get("has_pw", false))
+
+
+## Logs in to an account with its @username and password. Answers with login_done.
+func login(username: String, password: String) -> void:
+	if url == "":
+		login_done.emit(false, "offline")
+		return
+	if _login_ws != null:
+		_login_ws.close()
+	_login_ws = WebSocketPeer.new()
+	_login_msg = {"t": "s_login", "username": username.strip_edges().trim_prefix("@"), "password": password}
+	_login_at = Time.get_ticks_msec()
+	if _login_ws.connect_to_url(url) != OK:
+		_login_ws = null
+		login_done.emit(false, "offline")
+
+
+func _poll_login(now: int) -> void:
+	_login_ws.poll()
+	var rs := _login_ws.get_ready_state()
+	if now - _login_at > 75000 or rs == WebSocketPeer.STATE_CLOSED:
+		_login_ws.close()
+		_login_ws = null
+		login_done.emit(false, "offline")
+		return
+	if rs != WebSocketPeer.STATE_OPEN:
+		return
+	if not _login_msg.is_empty():
+		_login_ws.send_text(JSON.stringify(_login_msg))
+		_login_msg = {}
+	while _login_ws != null and _login_ws.get_available_packet_count() > 0:
+		var msg = JSON.parse_string(_login_ws.get_packet().get_string_from_utf8())
+		if not (msg is Dictionary):
+			continue
+		if msg.get("t") == "s_login_res":
+			_login_ws.close()
+			_login_ws = null
+			if bool(msg.get("ok", false)) and SocialHub.valid_uid(msg.get("uid")) and msg.get("token") is String:
+				_switch_to(str(msg.uid), str(msg.token), msg.get("me", {}))
+				login_done.emit(true, "")
+			else:
+				login_done.emit(false, str(msg.get("why", "wrong")))
+		elif msg.get("t") == "error":
+			_login_ws.close()
+			_login_ws = null
+			login_done.emit(false, "slow" if msg.get("code") == "rate_limit" else "offline")
+
+
+func _switch_to(new_uid: String, token: String, me: Dictionary) -> void:
+	if not is_logged_in():
+		# Keep this phone's own account to come back to on log out.
+		var f := FileAccess.open(DEVICE_PATH, FileAccess.WRITE)
+		if f:
+			f.store_string(JSON.stringify(data))
+	var key: String = data.key
+	data = {"key": key, "token": token, "login_uid": new_uid, "need_sync": true,
+		"name": str(me.get("name", "Player")), "username": str(me.get("username", "")),
+		"bio": str(me.get("bio", "")), "av": SocialHub.clean_av(me.get("av", -1)), "me": me}
+	for k in ["friends", "following", "req_out", "req_in", "chats", "unread", "cards"]:
+		data[k] = {}
+	uid = new_uid
+	_save_now()
+	account_switched.emit()
+	_touch()
+	_force_reconnect()
+
+
+## Leaves the logged-in account and goes back to this phone's own account.
+func logout() -> void:
+	if not is_logged_in():
+		return
+	if _welcomed:
+		_send({"t": "s_logout"})
+		# Let the message leave before the connection is dropped.
+		_ws.poll()
+	_back_to_device()
+
+
+func _back_to_device() -> void:
+	var key: String = data.key
+	data = {}
+	var f := FileAccess.open(DEVICE_PATH, FileAccess.READ)
+	if f:
+		var parsed = JSON.parse_string(f.get_as_text())
+		if parsed is Dictionary:
+			data = parsed
+		f.close()
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(DEVICE_PATH))
+	data.erase("token")
+	data.erase("login_uid")
+	data.erase("need_sync")
+	if not (data.get("key") is String):
+		data.key = key
+	_load_defaults()
+	uid = SocialHub.uid_for_key(data.key)
+	_save_now()
+	account_switched.emit()
+	_touch()
+	_force_reconnect()
+
+
+## Drops the connection and signs in again as the account now in `data`.
+func _force_reconnect() -> void:
+	if _ws:
+		_ws.close()
+		_ws = null
+	_welcomed = false
+	_backoff = 1.0
+	_retry_at = 0
+	if state == "elsewhere":
+		state = "offline"
+	_set_state("offline")
+	_open()
+
+
+func _load_defaults() -> void:
+	for k in ["friends", "following", "req_out", "req_in", "chats", "unread", "cards"]:
+		if not (data.get(k) is Dictionary):
+			data[k] = {}
+	for k in ["name", "username", "bio"]:
+		if not (data.get(k) is String):
+			data[k] = ""
+	data.av = SocialHub.clean_av(data.get("av", -1))
+	if not (data.get("me") is Dictionary):
+		data.me = {}
+
+
+## Sets (or changes) the password for logging in to this account on another phone.
+func set_password(password: String, old_password: String = "") -> bool:
+	var m := {"t": "s_setpw", "password": password, "rid": _next_rid()}
+	if old_password != "":
+		m["old"] = old_password
+	return _send(m)
+
+
+func _merge_chats(chats: Dictionary) -> void:
+	for w in chats:
+		if not SocialHub.valid_uid(w) or not (chats[w] is Array):
+			continue
+		var chat: Array = data.chats.get(w, [])
+		var have := {}
+		for m in chat:
+			have[str(m.mid)] = true
+		for m in chats[w]:
+			if not (m is Dictionary) or have.has(str(m.get("mid", ""))):
+				continue
+			var mine: bool = str(m.get("from", "")) == uid
+			chat.append({"mid": str(m.mid), "from": str(m.from), "text": str(m.get("text", "")),
+				"ts": int(m.get("ts", 0)), "state": "delivered" if mine else "in"})
+		chat.sort_custom(func(a, b): return int(a.ts) < int(b.ts))
+		if chat.size() > MAX_CHAT:
+			chat = chat.slice(chat.size() - MAX_CHAT)
+		data.chats[w] = chat
 
 
 # ------------------------------------------------------------------ incoming
@@ -233,6 +417,15 @@ func _on_msg(msg: Dictionary) -> void:
 			data.me = me
 			if me.get("username", "") is String and me.username != "":
 				data.username = me.username
+			if is_logged_in():
+				for k in ["name", "bio"]:
+					if me.get(k) is String:
+						data[k] = me[k]
+				if me.has("av"):
+					data.av = SocialHub.clean_av(me.av)
+			if msg.get("chats") is Dictionary:
+				_merge_chats(msg.chats)
+			data.erase("need_sync")
 			var fr := {}
 			for u in msg.get("friends", []):
 				if u is Dictionary and SocialHub.valid_uid(u.get("uid")):
@@ -262,6 +455,16 @@ func _on_msg(msg: Dictionary) -> void:
 				_set_state("elsewhere")
 				_ws.close()
 				_ws = null
+			elif msg.get("code") in ["logged_out", "bad_token"] and is_logged_in():
+				# The login ended (logged out on another phone): back to this phone's account.
+				_ws.close()
+				_ws = null
+				_back_to_device()
+		"s_setpw_res":
+			if bool(msg.get("ok", false)):
+				data.me["has_pw"] = true
+				_touch()
+			password_saved.emit(bool(msg.get("ok", false)), str(msg.get("why", "")))
 		"s_user":
 			if msg.get("user") is Dictionary:
 				_absorb(msg.user)
