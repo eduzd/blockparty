@@ -13,11 +13,10 @@ var settings := ConfigFile.new()
 # Menu
 var menu_layer: CanvasLayer
 var menu_root: Control
-var name_edit: LineEdit
-var room_edit: LineEdit
-var server_edit: LineEdit
-var friend_edit: LineEdit
 var menu_status: Label
+var social: SocialClient
+var shell: AppShell
+var shell_state := {"tab": 0, "stack": []}   # survives menu rebuilds (theme, rotation)
 var menu_buttons: Array[Control] = []
 var music_on := true
 var orientation := "portrait"   # the player's choice; portrait by default
@@ -81,7 +80,14 @@ func _ready() -> void:
 	ScreenUtil.apply_orientation(orientation)
 	fader = RotateFader.new()
 	add_child(fader)
-	UiKit.dark = DisplayServer.is_dark_mode()
+	_apply_theme()
+	social = SocialClient.new()
+	add_child(social)
+	social.ensure_profile(str(settings.get_value("p", "name", "")))
+	social.chat_message.connect(_on_chat_in_game)
+	social.notice.connect(_on_notice_in_game)
+	if autotest == "" or autotest.begins_with("social"):
+		social.start(server_url())
 	net = NetClient.new()
 	add_child(net)
 	net.joined.connect(_on_joined)
@@ -151,9 +157,11 @@ func _fit_roots() -> void:
 		if r and is_instance_valid(r):
 			r.scale = Vector2(k, k)
 			if r == menu_root:
-				# The menu's background is full-screen; its content keeps off the cutout.
-				r.position = Vector2(ins.l, ins.t)
-				r.size = Vector2(full.x - ins.l - ins.r, full.y - ins.t) / k
+				# The menu's background is full-screen; its content keeps off the cutout and
+				# status bar only, so the navigation bar can run edge to edge (each page
+				# keeps its own 16dp margins).
+				r.position = Vector2(ins.rl, ins.rt)
+				r.size = Vector2(full.x - ins.rl - ins.rr, full.y - ins.rt) / k
 			else:
 				r.position = Vector2(ins.l, ins.t)
 				r.size = Vector2(full.x - ins.l - ins.r, full.y - ins.t - ins.b) / k
@@ -190,91 +198,42 @@ func _build_menu() -> void:
 	menu_layer.add_child(bg)
 	menu_root = _scaled_root(menu_layer)
 	menu_root.mouse_filter = Control.MOUSE_FILTER_PASS
-	var theme_btn := Button.new()
-	theme_btn.flat = true
-	theme_btn.icon = UiKit.icon_texture("sun" if UiKit.dark else "moon")
-	theme_btn.add_theme_constant_override("icon_max_width", 24)
-	for st in ["icon_normal_color", "icon_pressed_color", "icon_hover_color"]:
-		theme_btn.add_theme_color_override(st, UiKit.c("on_background"))
-	theme_btn.custom_minimum_size = Vector2(48, 48)
-	theme_btn.focus_mode = Control.FOCUS_NONE
-	theme_btn.pressed.connect(func():
-		_save_settings()
-		UiKit.dark = not UiKit.dark
-		_build_menu())
-	var page := UiKit.pinned_page("Block Party", Callable(), null, [theme_btn])
-	menu_root.add_child(page[0])
-	var content: VBoxContainer = page[1]
-
-	var room_now := Protocol.sanitize_room(settings.get_value("p", "room", Protocol.DEFAULT_ROOM))
-	var hero := UiKit.hero_card("Play online", "Join room %s on the Block Party server" % room_now, "play", _on_play_online)
-	content.add_child(hero)
-	menu_buttons.append(hero)
-	menu_status = UiKit.label("", "body_medium", UiKit.c("error"))
-	content.add_child(UiKit.margin(menu_status, 20, 0, 20, 0))
-
-	content.add_child(UiKit.section_title("Play with friends"))
-	var friends: Array = UiKit.card()
-	content.add_child(friends[0])
-	var host_row := UiKit.setting_row("wifi", "Host on this phone", "Friends on the same Wi-Fi or hotspot join you", "", UiKit.SKY_MEDIUM, _on_host)
-	friends[1].add_child(host_row)
-	menu_buttons.append(host_row)
-	var fr: Array = UiKit.text_field("Friend's IP (192.168...)", settings.get_value("p", "friend", ""), 64, "Shown at the top of your friend's screen")
-	friend_edit = fr[1]
-	friends[1].add_child(UiKit.vspace(4))
-	friends[1].add_child(fr[0])
-	var join_btn := UiKit.outline_button("Join friend", "users", _on_join_friend)
-	friends[1].add_child(UiKit.margin(join_btn, 16, 12, 16, 16))
-	menu_buttons.append(join_btn)
-
-	content.add_child(UiKit.section_title("You"))
-	var nm: Array = UiKit.text_field("Your name", settings.get_value("p", "name", ""), 16)
-	name_edit = nm[1]
-	content.add_child(nm[0])
-	content.add_child(UiKit.vspace(12))
-	var rm: Array = UiKit.text_field("Room code", room_now, 6, "Everyone with the same code plays together")
-	room_edit = rm[1]
-	content.add_child(rm[0])
-
-	content.add_child(UiKit.section_title("Sound"))
-	var sound: Array = UiKit.card()
-	content.add_child(sound[0])
-	sound[1].add_child(UiKit.setting_row("sparkles", "Music", "The walls dance to it, and gravity flips on the drop",
-		"On" if music_on else "Off", UiKit.PINK, func():
-			_save_settings()
-			music_on = not music_on
-			settings.set_value("p", "music", music_on)
-			settings.save(SETTINGS_PATH)
-			_build_menu()))
-
-	content.add_child(UiKit.section_title("Screen"))
-	var screen_card: Array = UiKit.card()
-	content.add_child(screen_card[0])
-	var rot_row := HBoxContainer.new()
-	rot_row.add_theme_constant_override("separation", 8)
-	rot_row.add_child(UiKit.chip("Portrait", orientation == "portrait", func(): _save_settings(); _set_orientation("portrait")))
-	rot_row.add_child(UiKit.chip("Landscape", orientation == "landscape", func(): _save_settings(); _set_orientation("landscape")))
-	var rot_col := UiKit.vbox(8)
-	rot_col.add_child(UiKit.label("Phone orientation", "title_medium", UiKit.c("on_surface")))
-	rot_col.add_child(UiKit.label("Portrait is the default. You can also turn the screen from inside a game.", "body_medium", UiKit.c("on_surface_variant")))
-	rot_col.add_child(rot_row)
-	screen_card[1].add_child(UiKit.margin(rot_col, 16, 14, 16, 16))
-
-	content.add_child(UiKit.section_title("Server"))
-	var sv: Array = UiKit.text_field("Server address (wss://...)", settings.get_value("p", "server", DEFAULT_SERVER_URL), 200, "Used by Play online")
-	server_edit = sv[1]
-	content.add_child(sv[0])
-	content.add_child(UiKit.end_padding())
+	shell = AppShell.new(self, social, shell_state)
+	menu_root.add_child(shell)
 	_fit_roots()
 
 
-func _save_settings() -> void:
-	if name_edit == null or not is_instance_valid(name_edit):
+func server_url() -> String:
+	return str(settings.get_value("p", "server", DEFAULT_SERVER_URL)).strip_edges()
+
+
+func set_server(t: String) -> void:
+	var url := t.strip_edges()
+	if url != "" and not url.begins_with("ws://") and not url.begins_with("wss://"):
+		url = "wss://" + url.trim_prefix("https://").trim_prefix("http://")
+	if url == server_url():
 		return
-	settings.set_value("p", "name", name_edit.text)
-	settings.set_value("p", "room", room_edit.text)
-	settings.set_value("p", "server", server_edit.text)
-	settings.set_value("p", "friend", friend_edit.text)
+	settings.set_value("p", "server", url)
+	settings.save(SETTINGS_PATH)
+	social.start(url)
+
+
+## Theme: "system" follows the phone, or "light" / "dark".
+func _apply_theme() -> void:
+	var t := str(settings.get_value("p", "theme", "system"))
+	UiKit.dark = DisplayServer.is_dark_mode() if t == "system" else t == "dark"
+
+
+func set_theme(t: String) -> void:
+	settings.set_value("p", "theme", t)
+	settings.save(SETTINGS_PATH)
+	var was := UiKit.dark
+	_apply_theme()
+	if was != UiKit.dark or true:
+		_build_menu()
+
+
+func _save_settings() -> void:
 	settings.set_value("p", "music", music_on)
 	settings.save(SETTINGS_PATH)
 
@@ -290,26 +249,31 @@ func _set_menu_busy(busy: bool) -> void:
 
 
 func _status(text: String, problem := true) -> void:
+	if menu_status == null or not is_instance_valid(menu_status):
+		if text != "" and problem and shell and is_instance_valid(shell):
+			shell._toast(text)
+		return
 	menu_status.text = text
+	menu_status.visible = text != ""
 	menu_status.add_theme_color_override("font_color", UiKit.c("error") if problem else UiKit.c("on_surface_variant"))
 
 
 func _player_name() -> String:
-	var n := Protocol.sanitize_name(name_edit.text)
+	var n := Protocol.sanitize_name(str(social.data.name))
+	if n == "Player":
+		n = Protocol.sanitize_name(str(settings.get_value("p", "name", "")))
 	if n == "Player":
 		n = "Player%d" % (randi() % 900 + 100)
-		name_edit.text = n
 	return n
 
 
 func _on_play_online() -> void:
-	var url := server_edit.text.strip_edges()
+	var url := server_url()
 	if url == "" or url.contains("YOUR-SERVICE"):
-		_status("Type the server address first, under Server.")
+		_status("Add the server address first, in Profile > Settings.")
 		return
 	if not url.begins_with("ws://") and not url.begins_with("wss://"):
 		url = "wss://" + url.trim_prefix("https://").trim_prefix("http://")
-		server_edit.text = url
 	mode = "online"
 	_connect(url)
 
@@ -327,7 +291,7 @@ func _on_host() -> void:
 
 
 func _on_join_friend() -> void:
-	var ip := friend_edit.text.strip_edges()
+	var ip := str(settings.get_value("p", "friend", "")).strip_edges()
 	if ip == "":
 		_status("Type your friend's IP address (shown on their screen).")
 		return
@@ -342,7 +306,7 @@ func _connect(url: String) -> void:
 	_save_settings()
 	_set_menu_busy(true)
 	_status("Connecting...", false)
-	net.join(url, _player_name(), Protocol.sanitize_room(room_edit.text))
+	net.join(url, _player_name(), Protocol.sanitize_room(str(settings.get_value("p", "room", Protocol.DEFAULT_ROOM))))
 
 
 func _local_ips() -> Array:
@@ -717,8 +681,28 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_GO_BACK_REQUEST:
 		if world:
 			_leave_game()
+		elif shell and is_instance_valid(shell) and shell.back():
+			pass
 		else:
 			get_tree().quit()
+	elif what == NOTIFICATION_APPLICATION_RESUMED or what == NOTIFICATION_APPLICATION_FOCUS_IN:
+		if social:
+			social.reconnect_now()
+		if world == null and str(settings.get_value("p", "theme", "system")) == "system" and DisplayServer.is_dark_mode() != UiKit.dark:
+			_apply_theme()
+			_build_menu()
+
+
+## Friend messages and requests while playing show as a game toast.
+func _on_chat_in_game(uid: String, m: Dictionary) -> void:
+	if world:
+		var u: Dictionary = social.card_for(uid)
+		_toast("%s: %s" % [str(u.get("name", "Friend")), str(m.get("text", "")).replace("\n", " ").left(50)])
+
+
+func _on_notice_in_game(kind: String, who: Dictionary) -> void:
+	if world and kind == "request":
+		_toast("%s sent you a friend request" % str(who.get("name", "Someone")))
 
 
 ## Gravity follows the beat clock, so it flips exactly on the drop together
@@ -796,6 +780,7 @@ func _layout_report() -> String:
 	var ins := ScreenUtil.insets(vp)
 	var safe := Rect2(ins.l, ins.t, size.x - ins.l - ins.r, size.y - ins.t - ins.b)
 	var items := {}
+	var problems := []
 	if hud_buttons:
 		items["buttons"] = hud_buttons.get_global_rect()
 		for p in [["info", hud_info], ["hosts", hud_hosts], ["voice", hud_voice]]:
@@ -809,10 +794,12 @@ func _layout_report() -> String:
 			items["stick"] = Rect2(sh - Vector2(sr, sr), Vector2(sr, sr) * 2.0)
 			items["jump"] = Rect2(jc - Vector2(jr, jr), Vector2(jr, jr) * 2.0)
 	elif menu_root:
-		# The menu scrolls under the gesture bar like any app list; check sides and top only.
+		# The tabs run edge to edge, so the menu is checked against the real insets
+		# (camera cutout, status bar) without the 8dp minimum the HUD uses.
 		var m := menu_root.get_global_rect()
-		items["menu"] = Rect2(m.position, Vector2(m.size.x, minf(m.size.y, safe.end.y - m.position.y)))
-	var problems := []
+		var real := Rect2(ins.rl, ins.rt, size.x - ins.rl - ins.rr, size.y - ins.rt)
+		if not real.grow(0.5).encloses(m):
+			problems.append("menu outside the screen's safe area %s" % str(m))
 	var safe_grown := safe.grow(0.5)
 	for n in items:
 		if not safe_grown.encloses(items[n]):
@@ -831,15 +818,15 @@ func _layout_report() -> String:
 
 
 func _start_autotest() -> void:
-	name_edit.text = "Bot%d" % (OS.get_process_id() % 1000)
+	if not autotest.begins_with("social") and autotest != "menu":
+		social.data.name = "Bot%d" % (OS.get_process_id() % 1000)
 	if autotest == "host" or autotest == "host_rotate":
 		_on_host()
-	elif autotest == "menu":
-		pass
+	elif autotest == "menu" or autotest.begins_with("social"):
+		_autotest_social_setup()
 	elif autotest.begins_with("join:"):
-		server_edit.text = autotest.substr(5)
 		mode = "online"
-		_connect(server_edit.text)
+		_connect(autotest.substr(5))
 
 
 func _autotest_tick(delta: float) -> void:
@@ -855,7 +842,10 @@ func _autotest_tick(delta: float) -> void:
 		if fmod(autotest_t, 2.0) < delta:
 			player.jump_pressed = true
 	var limit := float(OS.get_environment("AUTOTEST_SECONDS")) if OS.has_environment("AUTOTEST_SECONDS") else 12.0
-	if autotest == "menu" and autotest_t > limit:
+	if autotest.begins_with("social") or autotest == "menu":
+		_autotest_social_tick()
+	if (autotest == "menu" or autotest.begins_with("social")) and autotest_t > limit:
+		_dump_ui()
 		print("AUTOTEST LAYOUT ", _layout_report())
 		if OS.has_environment("AUTOTEST_SHOT"):
 			get_viewport().get_texture().get_image().save_png(OS.get_environment("AUTOTEST_SHOT"))
@@ -876,3 +866,126 @@ func _autotest_tick(delta: float) -> void:
 		if OS.has_environment("AUTOTEST_SHOT"):
 			get_viewport().get_texture().get_image().save_png(OS.get_environment("AUTOTEST_SHOT"))
 		get_tree().quit()
+
+
+# ------------------------------------------------------------- UI autotest
+# AUTOTEST_SCREEN picks what to show: home, games, chat, profile, search,
+# user:<uid>, chat:<uid>, requests, edit, settings, list. AUTOTEST_TAPS is a list of
+# "x,y@seconds" taps in viewport pixels, to drive the real buttons.
+
+func _autotest_social_setup() -> void:
+	var scr := OS.get_environment("AUTOTEST_SCREEN") if OS.has_environment("AUTOTEST_SCREEN") else "home"
+	await get_tree().create_timer(0.3).timeout
+	if not shell or not is_instance_valid(shell):
+		return
+	match scr.get_slice(":", 0):
+		"home": shell.select_tab(0)
+		"games": shell.select_tab(1)
+		"chat": shell.select_tab(2)
+		"profile": shell.select_tab(3)
+		"search": shell.push({"k": "search"})
+		"requests": shell.push({"k": "requests"})
+		"edit": shell.select_tab(3); shell.push({"k": "edit"})
+		"settings": shell.select_tab(3); shell.push({"k": "settings"})
+		"list": shell.push({"k": "list", "uid": social.uid, "kind": "friends"})
+		"user": shell.push({"k": "user", "uid": scr.get_slice(":", 1)})
+		"chat_with": shell.select_tab(2); shell.push({"k": "chat", "uid": scr.get_slice(":", 1)})
+		"firstfriend":
+			await get_tree().create_timer(4.0).timeout
+			if not social.data.friends.is_empty():
+				shell.select_tab(2)
+				shell.push({"k": "chat", "uid": social.data.friends.keys()[0]})
+
+
+var _taps_done := {}
+
+func _autotest_social_tick() -> void:
+	if not OS.has_environment("AUTOTEST_TAPS"):
+		return
+	var taps := OS.get_environment("AUTOTEST_TAPS").split(";", false)
+	for i in taps.size():
+		if _taps_done.has(i):
+			continue
+		var parts := taps[i].split("@")
+		if parts.size() != 2 or autotest_t < float(parts[1]):
+			continue
+		_taps_done[i] = true
+		if parts[0].begins_with("type:"):
+			var txt := parts[0].substr(5)
+			var f := get_viewport().gui_get_focus_owner()
+			if f is LineEdit:
+				f.insert_text_at_caret(txt)
+				f.text_changed.emit(f.text)
+			print("AUTOTEST TYPE ", txt, " into ", f)
+			continue
+		if parts[0] == "enter":
+			var f2 := get_viewport().gui_get_focus_owner()
+			if f2 is LineEdit:
+				f2.text_submitted.emit(f2.text)
+			continue
+		if parts[0] == "dump":
+			_dump_ui()
+			continue
+		if parts[0] == "shot":
+			if OS.has_environment("AUTOTEST_SHOT"):
+				get_viewport().get_texture().get_image().save_png(OS.get_environment("AUTOTEST_SHOT").replace(".png", "_%.0f.png" % autotest_t))
+			continue
+		var xy := parts[0].split(",")
+		var pos := Vector2(float(xy[0]), float(xy[1]))
+		for pressed in [true, false]:
+			var ev := InputEventMouseButton.new()
+			ev.button_index = MOUSE_BUTTON_LEFT
+			ev.pressed = pressed
+			ev.position = pos
+			ev.global_position = pos
+			Input.parse_input_event(ev)
+		print("AUTOTEST TAP ", pos)
+
+
+## Prints what is on screen: each visible label, button and field with its rect, and
+## any visible control that sticks out of the screen sideways or overlaps the nav bar.
+func _dump_ui() -> void:
+	var vp := get_viewport().get_visible_rect()
+	var lines := []
+	var nav_rect := Rect2()
+	if shell and shell._nav and is_instance_valid(shell._nav) and shell.state.stack.is_empty():
+		nav_rect = shell._nav.get_global_rect()
+	var stack := [menu_root]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		for ch in n.get_children():
+			stack.append(ch)
+		if not (n is Control) or not n.is_visible_in_tree():
+			continue
+		var r: Rect2 = n.get_global_rect()
+		if r.size.x < 1 or r.size.y < 1:
+			continue
+		var on_screen := r.intersects(vp)
+		if not on_screen:
+			continue
+		var txt := ""
+		if n is Label:
+			txt = "L:" + n.text
+		elif n is Button:
+			txt = "B:" + n.text + (" (icon)" if n.icon else "") + (" [disabled]" if n.disabled else "")
+		elif n is LineEdit:
+			txt = "F:" + (n.text if n.text != "" else "(" + n.placeholder_text + ")")
+		if txt == "":
+			continue
+		var flags := ""
+		if r.position.x < -0.5 or r.end.x > vp.end.x + 0.5:
+			flags += " !SIDE"
+		if nav_rect.size.y > 0 and not shell._nav.is_ancestor_of(n) and r.end.y > nav_rect.position.y + 1 and r.position.y < nav_rect.position.y - 1:
+			# partly under the nav bar: fine for scrolled content, flagged for reference
+			flags += " ~undernav"
+		if n is Label and n.clip_text and n.get_minimum_size().x > 0:
+			var f: Font = n.get_theme_font("font")
+			var fs: int = n.get_theme_font_size("font_size")
+			if f and f.get_string_size(n.text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x > n.size.x + 1:
+				flags += " ...TRUNC"
+		lines.append([r.position.y, r.position.x, "%s @(%d,%d %dx%d)%s" % [txt.replace("\n", "/").left(70), r.position.x, r.position.y, r.size.x, r.size.y, flags]])
+	lines.sort_custom(func(a, b): return a[0] < b[0] or (a[0] == b[0] and a[1] < b[1]))
+	print("AUTOTEST UI BEGIN nav=", nav_rect)
+	for l in lines:
+		print("  ", l[2])
+	print("AUTOTEST UI END")

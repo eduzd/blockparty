@@ -41,6 +41,10 @@ static func insets(vp: Viewport) -> Dictionary:
 			r = maxf(win.x - float(safe.end.x), 0.0) * sx
 			b = maxf(win.y - float(safe.end.y), 0.0) * sy
 	return {
+		"rb": b,   # the real insets, with no minimum (for edge-to-edge bars)
+		"rl": l,
+		"rt": t,
+		"rr": r,
 		"l": maxf(l, MIN_EDGE_DP * k),
 		"t": maxf(t, MIN_EDGE_DP * k),
 		"r": maxf(r, MIN_EDGE_DP * k),
@@ -62,3 +66,14 @@ static func apply_orientation(mode: String) -> void:
 			var w := (Engine.get_main_loop() as SceneTree).root
 			w.size = Vector2i(s.y, s.x)
 			print("[screen] window turned to ", Vector2i(s.y, s.x))
+
+
+## Height of the on-screen keyboard in viewport pixels (0 when hidden or on desktop).
+static func keyboard_height(vp: Viewport) -> float:
+	if not OS.has_feature("mobile"):
+		return 0.0
+	var kb := float(DisplayServer.virtual_keyboard_get_height())
+	var win := Vector2(DisplayServer.window_get_size())
+	if kb <= 0.0 or win.y <= 0.0:
+		return 0.0
+	return kb * vp.get_visible_rect().size.y / win.y

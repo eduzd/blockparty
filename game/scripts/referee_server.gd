@@ -23,9 +23,14 @@ var balls_enabled := true
 var voice_ice: Array = [{"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]}]
 var _next_id := 1
 var _snap_accum := 0.0
+## Profiles, friends, follows and chat (see SocialHub). Same port as the game.
+var social: SocialHub
 
 
 func start(p_port: int, bind_address: String = "*") -> Error:
+	social = SocialHub.new(func(cid: int, data: Dictionary):
+		if _clients.has(cid):
+			_send(_clients[cid], data), _log)
 	if OS.has_environment("VOICE_ICE_SERVERS"):
 		var parsed = JSON.parse_string(OS.get_environment("VOICE_ICE_SERVERS"))
 		if parsed is Array:
@@ -44,6 +49,8 @@ func start(p_port: int, bind_address: String = "*") -> Error:
 func stop() -> void:
 	for id in _clients.keys():
 		_clients[id].ws.close(1001, "server stopping")
+		if social:
+			social.on_disconnect(id, 0)
 	_clients.clear()
 	_rooms.clear()
 	_balls.clear()
@@ -140,7 +147,7 @@ func _poll_clients(now: int) -> void:
 			_handle_packet(c, pkt, ws.was_string_packet(), now)
 		if not _clients.has(id):
 			continue
-		if c.room == "" and now - int(c.joined_at) > Protocol.HELLO_TIMEOUT_MS:
+		if c.room == "" and not bool(c.get("social", false)) and now - int(c.joined_at) > Protocol.HELLO_TIMEOUT_MS:
 			_kick(id, "hello_timeout", "No hello received")
 		elif now - int(c.last_msg) > Protocol.IDLE_TIMEOUT_MS:
 			_kick(id, "idle", "Timed out")
@@ -164,7 +171,8 @@ func _handle_packet(c: Dictionary, pkt: PackedByteArray, is_text: bool, now: int
 		_bad(c, "bad_message")
 		return
 	var is_signal: bool = msg.t == "vsig"
-	if pkt.size() > Protocol.MAX_MESSAGE_BYTES and not is_signal:
+	var is_social := SocialHub.is_social(msg.t)
+	if pkt.size() > Protocol.MAX_MESSAGE_BYTES and not is_signal and not is_social:
 		_kick(id, "too_big", "Message too large")
 		return
 	# Rate limits: game messages and voice signalling are counted separately.
@@ -183,6 +191,9 @@ func _handle_packet(c: Dictionary, pkt: PackedByteArray, is_text: bool, now: int
 			_kick(id, "rate_limit", "Too many messages")
 			return
 	c.last_msg = now
+	if is_social:
+		_on_social(c, msg)
+		return
 	match msg.t:
 		"hello":
 			_on_hello(c, msg, now)
@@ -202,6 +213,33 @@ func _handle_packet(c: Dictionary, pkt: PackedByteArray, is_text: bool, now: int
 			_on_voice_signal(c, msg)
 		_:
 			_bad(c, "unknown_type")
+
+
+# ---------------------------------------------------------------- social
+# A social connection never joins a room: it says s_hello instead of hello and then
+# only sends s_* messages (and pings) while the app is open.
+
+func _on_social(c: Dictionary, msg: Dictionary) -> void:
+	var unix := int(Time.get_unix_time_from_system())
+	if msg.t == "s_hello":
+		if c.room != "" or bool(c.get("social", false)):
+			_bad(c, "already_joined")
+			return
+		if msg.get("v") != Protocol.VERSION and msg.get("v") != float(Protocol.VERSION):
+			_kick(c.id, "bad_version", "Please update the app")
+			return
+		var err := social.on_hello(c.id, msg, unix)
+		if err != "":
+			_kick(c.id, err, "Sign-in refused")
+			return
+		c.social = true
+		return
+	if not bool(c.get("social", false)) or not social.is_signed_in(c.id):
+		_bad(c, "not_signed_in")
+		return
+	var err2 := social.handle(c.id, msg, unix)
+	if err2 != "":
+		_bad(c, err2)
 
 
 # ---------------------------------------------------------------- voice signalling
@@ -457,6 +495,8 @@ func _remove(id: int, reason: String) -> void:
 		return
 	var c: Dictionary = _clients[id]
 	_clients.erase(id)
+	if bool(c.get("social", false)) and social:
+		social.on_disconnect(id, int(Time.get_unix_time_from_system()))
 	if c.room != "" and _rooms.has(c.room):
 		var members: Array = _rooms[c.room]
 		members.erase(id)

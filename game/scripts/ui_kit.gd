@@ -202,7 +202,8 @@ static func _button(text: String, icon_name: String, cb: Callable, fill: Color, 
 			b.add_theme_color_override(state, fg)
 	b.alignment = HORIZONTAL_ALIGNMENT_CENTER
 	b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	b.pressed.connect(cb)
+	if cb.is_valid():
+		b.pressed.connect(cb)
 	add_press_shrink(b)
 	return b
 
@@ -218,7 +219,9 @@ static func outline_button(text: String, icon_name: String, cb: Callable) -> But
 
 
 static func text_button(text: String, color: Color, cb: Callable) -> Button:
-	return _button(text, "", cb, Color.TRANSPARENT, color, Color.TRANSPARENT, 0, 40, 12, 8, "label_large", 0)
+	var b := _button(text, "", cb, Color.TRANSPARENT, color, Color.TRANSPARENT, 0, 40, 12, 8, "label_large", 0)
+	b.autowrap_mode = TextServer.AUTOWRAP_OFF
+	return b
 
 
 ## Chip: pill, 40dp min height, 14/8 padding, labelLarge. Selected = Ink/Sky.
@@ -230,6 +233,7 @@ static func chip(text: String, selected: bool, cb: Callable) -> Button:
 		var sb: StyleBoxFlat = b.get_theme_stylebox(st)
 		sb.set_corner_radius_all(20)
 	b.add_theme_font_override("font", font("dm", 500))
+	b.autowrap_mode = TextServer.AUTOWRAP_OFF
 	return b
 
 
@@ -447,6 +451,11 @@ static func pinned_page(title: String, back_cb: Callable, leading: Control = nul
 	var t := label(title.to_upper(), "headline_large", c("on_background"), false)
 	t.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	t.clip_text = true
+	# clip_text drops the label's minimum width to 0; keep its natural width (capped
+	# so actions always fit on a 360dp phone) so the title never collapses.
+	var natural: float = t.get_theme_font("font").get_string_size(t.text, HORIZONTAL_ALIGNMENT_LEFT, -1, t.get_theme_font_size("font_size")).x
+	var room := 330.0 - (48.0 if back_cb.is_valid() else 0.0) - (56.0 if leading else 0.0) - 48.0 * trailing.size()
+	t.custom_minimum_size.x = minf(natural + 1.0, maxf(room, 120.0))
 	head.add_child(t)
 	head.add_child(_spacer(6))
 	var dot := GradientShape.new()
@@ -488,6 +497,353 @@ static func end_padding() -> Control:
 	return vspace(24)
 
 
+# ------------------------------------------------------------------ navigation and social pieces
+
+## Icon button (48dp touch target, 24dp icon) for top-bar actions. Optional badge count.
+static func icon_button(icon_name: String, cb: Callable, tint: Color = Color(0, 0, 0, 0), badge_count := 0) -> Control:
+	var b := Button.new()
+	b.flat = true
+	b.icon = icon_texture(icon_name)
+	b.add_theme_constant_override("icon_max_width", 24)
+	var col := tint if tint.a > 0 else c("on_background")
+	for st in ["icon_normal_color", "icon_pressed_color", "icon_hover_color", "icon_focus_color", "icon_hover_pressed_color"]:
+		b.add_theme_color_override(st, col)
+	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	var press := box(Color(c("on_surface"), 0.10), 24)
+	b.add_theme_stylebox_override("pressed", press)
+	b.add_theme_stylebox_override("hover_pressed", press)
+	b.add_theme_stylebox_override("hover", StyleBoxEmpty.new())
+	b.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
+	b.custom_minimum_size = Vector2(48, 48)
+	b.focus_mode = Control.FOCUS_NONE
+	b.mouse_filter = Control.MOUSE_FILTER_PASS
+	b.pressed.connect(cb)
+	if badge_count > 0:
+		var bd := badge(badge_count)
+		bd.position = Vector2(26, 6)
+		b.add_child(bd)
+	return b
+
+
+## Count badge (Material 3 large badge): error colour, 16dp tall, white labelSmall.
+static func badge(count: int) -> Control:
+	var l := Label.new()
+	l.text = str(count) if count < 100 else "99+"
+	l.add_theme_font_override("font", font("dm", 600))
+	l.add_theme_font_size_override("font_size", 11)
+	l.add_theme_color_override("font_color", Color.WHITE)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	var sb := box(c("error"), 8)
+	sb.content_margin_left = 4
+	sb.content_margin_right = 4
+	l.add_theme_stylebox_override("normal", sb)
+	l.custom_minimum_size = Vector2(16, 16)
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return l
+
+
+## One navigation destination: 64x32 indicator pill (primary 14% when selected) with
+## a 24dp icon, then the 12sp label. Selected icon and label use primary.
+static func _nav_item(item: Dictionary, selected: bool, cb: Callable, vertical_gap: float) -> Control:
+	var row := TapRow.new()
+	row.on_tap = cb
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var col := vbox(4)
+	col.alignment = BoxContainer.ALIGNMENT_CENTER
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var pill_box := PanelContainer.new()
+	pill_box.custom_minimum_size = Vector2(64, 32)
+	pill_box.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	pill_box.add_theme_stylebox_override("panel", box(Color(c("primary"), 0.14 if selected else 0.0), 16))
+	pill_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var tint := c("primary") if selected else c("on_surface_variant")
+	var ic := icon(str(item.icon), 24, tint)
+	ic.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	pill_box.add_child(ic)
+	var n := int(item.get("badge", 0))
+	if n > 0:
+		var holder := Control.new()
+		holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		holder.size_flags_horizontal = Control.SIZE_SHRINK_END
+		holder.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+		holder.custom_minimum_size = Vector2(0, 0)
+		pill_box.add_child(holder)
+		var bd := badge(n)
+		bd.position = Vector2(-22, 0)
+		holder.add_child(bd)
+	col.add_child(pill_box)
+	var l := Label.new()
+	l.text = str(item.label)
+	l.add_theme_font_override("font", font("dm", 600 if selected else 500))
+	l.add_theme_font_size_override("font_size", 12)
+	l.add_theme_color_override("font_color", tint)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	l.clip_text = true
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(l)
+	row.add_child(margin(col, 0, vertical_gap, 0, vertical_gap))
+	row.get_child(0).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return row
+
+
+## Bottom navigation bar (phones under 600dp): surfaceContainerLow, 80dp + the
+## gesture-bar inset, items share the width.
+static func nav_bar(items: Array, selected: int, cb: Callable, bottom_inset: float) -> Control:
+	var p := PanelContainer.new()
+	p.add_theme_stylebox_override("panel", box(c("surface_container_low"), 0))
+	p.mouse_filter = Control.MOUSE_FILTER_STOP
+	var col := vbox(0)
+	var line := ColorRect.new()
+	line.color = c("outline_variant")
+	line.custom_minimum_size = Vector2(0, 1)
+	col.add_child(line)
+	var h := hbox(0)
+	h.custom_minimum_size = Vector2(0, 79)
+	for i in items.size():
+		h.add_child(_nav_item(items[i], i == selected, cb.bind(i), 12))
+	col.add_child(h)
+	col.add_child(vspace(bottom_inset))
+	p.add_child(col)
+	return p
+
+
+## Side rail (600dp and wider): 80dp wide, same colours, items centred vertically.
+static func nav_rail(items: Array, selected: int, cb: Callable) -> Control:
+	var p := PanelContainer.new()
+	p.add_theme_stylebox_override("panel", box(c("surface_container_low"), 0))
+	p.custom_minimum_size = Vector2(80, 0)
+	p.mouse_filter = Control.MOUSE_FILTER_STOP
+	var h := hbox(0)
+	var col := vbox(12)
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.alignment = BoxContainer.ALIGNMENT_CENTER
+	for i in items.size():
+		var it := _nav_item(items[i], i == selected, cb.bind(i), 4)
+		it.size_flags_horizontal = Control.SIZE_FILL
+		col.add_child(it)
+	h.add_child(col)
+	var line := ColorRect.new()
+	line.color = c("outline_variant")
+	line.custom_minimum_size = Vector2(1, 0)
+	h.add_child(line)
+	p.add_child(h)
+	return p
+
+
+## Search field: 12dp corners, 20dp magnifying glass, clear (x-circle) once there is text.
+static func search_field(placeholder: String, value: String = "") -> Array:
+	var holder := PanelContainer.new()
+	var normal := box(Color.TRANSPARENT, 12, c("outline"), 1)
+	var focused := box(Color.TRANSPARENT, 12, c("primary"), 2)
+	holder.add_theme_stylebox_override("panel", normal)
+	holder.mouse_filter = Control.MOUSE_FILTER_PASS
+	var h := hbox(8)
+	h.add_child(_spacer(6))
+	var glass := icon("magnifying-glass", 20, c("on_surface_variant"))
+	glass.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	h.add_child(glass)
+	var e := LineEdit.new()
+	e.placeholder_text = placeholder
+	e.text = value
+	e.max_length = 30
+	e.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	e.custom_minimum_size = Vector2(0, 54)
+	e.add_theme_font_override("font", font("dm", 400))
+	e.add_theme_font_size_override("font_size", 16)
+	e.add_theme_color_override("font_color", c("on_surface"))
+	e.add_theme_color_override("font_placeholder_color", c("on_surface_variant"))
+	e.add_theme_color_override("caret_color", c("primary"))
+	e.add_theme_color_override("selection_color", Color(c("primary"), 0.3))
+	for st in ["normal", "focus", "read_only"]:
+		e.add_theme_stylebox_override(st, StyleBoxEmpty.new())
+	e.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_DEFAULT
+	h.add_child(e)
+	var clear := icon_button("x-circle", func(): e.text = ""; e.text_changed.emit(""), c("on_surface_variant"))
+	clear.visible = value != ""
+	h.add_child(clear)
+	e.text_changed.connect(func(t: String): clear.visible = t != "")
+	e.focus_entered.connect(func(): holder.add_theme_stylebox_override("panel", focused))
+	e.focus_exited.connect(func(): holder.add_theme_stylebox_override("panel", normal))
+	holder.add_child(h)
+	return [margin(holder, 16, 4, 16, 4), e]
+
+
+## Empty state: 32/56 padding, 44dp icon, title and sub centred.
+static func empty_state(icon_name: String, title: String, sub: String, action: Control = null) -> Control:
+	var col := vbox(0)
+	col.alignment = BoxContainer.ALIGNMENT_CENTER
+	var ic := icon(icon_name, 44, c("on_surface_variant"))
+	ic.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	col.add_child(ic)
+	col.add_child(vspace(12))
+	var t := label(title, "title_medium", c("on_surface"))
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(t)
+	var s := label(sub, "body_medium", c("on_surface_variant"))
+	s.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(s)
+	if action:
+		col.add_child(vspace(16))
+		action.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		col.add_child(action)
+	return margin(col, 32, 40, 32, 40)
+
+
+## Avatar with a presence dot (success green with a background-coloured ring).
+static func avatar_presence(size: float, name: String, online: bool) -> Control:
+	var wrap := Control.new()
+	wrap.custom_minimum_size = Vector2(size, size)
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var av := avatar(size, name)
+	av.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrap.add_child(av)
+	if online:
+		var d := maxf(10.0, size * 0.28)
+		var dot := Panel.new()
+		dot.add_theme_stylebox_override("panel", box(SUCCESS, d / 2.0, c("surface_container"), 2))
+		dot.size = Vector2(d, d)
+		dot.position = Vector2(size - d + 1, size - d + 1)
+		dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		wrap.add_child(dot)
+	return wrap
+
+
+## Person row inside a card: avatar (with presence), name (titleMedium), sub line,
+## optional trailing controls. The whole row taps unless cb is empty.
+static func person_row(name: String, sub: String, online: bool, cb: Callable, trailing: Array = [], sub_color: Color = Color(0, 0, 0, 0)) -> Control:
+	var row := TapRow.new()
+	row.on_tap = cb
+	var h := hbox(14)
+	h.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	h.add_child(avatar_presence(44, name, online))
+	var col := vbox(0)
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var t := label(name, "title_medium", c("on_surface"), false)
+	t.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	t.clip_text = true
+	col.add_child(t)
+	if sub != "":
+		var s := label(sub, "body_medium", sub_color if sub_color.a > 0 else c("on_surface_variant"), false)
+		s.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		s.clip_text = true
+		col.add_child(s)
+	h.add_child(col)
+	for tr in trailing:
+		h.add_child(tr)
+	for ch in h.get_children():
+		ch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(margin(h, 16, 11, 12 if not trailing.is_empty() else 16, 11))
+	row.get_child(0).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return row
+
+
+## Small buttons used inside rows (36dp tall): filled Ink/Sky or outline.
+static func small_button(text: String, filled: bool, cb: Callable, icon_name := "") -> Button:
+	var b := _button(text, icon_name, cb, c("button") if filled else Color.TRANSPARENT,
+		c("on_button") if filled else c("on_surface"), Color.TRANSPARENT if filled else c("outline_button_border"),
+		0 if filled else 1, 36, 14, 6, "label_large", 16)
+	b.autowrap_mode = TextServer.AUTOWRAP_OFF
+	return b
+
+
+## Profile header (16/10 margin, 24dp corners, surfaceContainer, 16dp padding, 72dp
+## avatar, name titleLarge, @username primary). `actions` sit full width below.
+static func profile_header(name: String, username: String, bio: String, online: bool, actions: Array, note := "") -> Control:
+	var p := PanelContainer.new()
+	p.add_theme_stylebox_override("panel", pad(box(c("surface_container"), 24, c("outline_variant"), 1), 16, 16))
+	var col := vbox(0)
+	var h := hbox(14)
+	h.add_child(avatar_presence(72, name, online))
+	var tc := vbox(2)
+	tc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tc.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	tc.add_child(label(name, "title_large", c("on_surface")))
+	if username != "":
+		tc.add_child(label("@" + username, "body_medium", c("primary")))
+	else:
+		tc.add_child(label("Add a username", "body_medium", c("on_surface_variant")))
+	h.add_child(tc)
+	col.add_child(h)
+	if bio != "":
+		col.add_child(vspace(12))
+		col.add_child(label(bio, "body_medium", c("on_surface")))
+	if not actions.is_empty():
+		col.add_child(vspace(12))
+		var ah := hbox(8)
+		for a in actions:
+			a.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			if a is Button:
+				a.autowrap_mode = TextServer.AUTOWRAP_OFF
+				a.clip_text = true
+			ah.add_child(a)
+		col.add_child(ah)
+	if note != "":
+		col.add_child(vspace(8))
+		col.add_child(label(note, "body_small", c("on_surface_variant")))
+	p.add_child(col)
+	return margin(p, 16, 10, 16, 10)
+
+
+## Stat tile for a row of counts (Friends / Followers / Following).
+static func stat_tile(value: int, title: String, cb: Callable) -> Control:
+	var row := TapRow.new()
+	row.on_tap = cb
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_theme_stylebox_override("panel", box(c("surface_container"), 20, Color(c("outline_variant"), 0.6), 1))
+	var col := vbox(2)
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var v := label(str(value), "title_large", c("on_surface"), false)
+	v.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(v)
+	var t := label(title, "body_medium", c("on_surface_variant"), false)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(t)
+	row.add_child(margin(col, 8, 14, 8, 14))
+	row.get_child(0).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_press_shrink_row(row)
+	return row
+
+
+## Quick grid cell: 48dp primary-12% box with a 24dp primary icon, labelMedium below.
+static func quick_cell(icon_name: String, text: String, cb: Callable, badge_count := 0) -> Control:
+	var row := TapRow.new()
+	row.on_tap = cb
+	row.gradient_radius = 0
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var col := vbox(6)
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var bx := PanelContainer.new()
+	bx.custom_minimum_size = Vector2(48, 48)
+	bx.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	bx.add_theme_stylebox_override("panel", box(Color(c("primary"), 0.12), 16))
+	bx.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var ic := icon(icon_name, 24, c("primary"))
+	ic.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	bx.add_child(ic)
+	if badge_count > 0:
+		var holder := Control.new()
+		holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		holder.size_flags_horizontal = Control.SIZE_SHRINK_END
+		holder.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+		bx.add_child(holder)
+		var bd := badge(badge_count)
+		bd.position = Vector2(-12, -4)
+		holder.add_child(bd)
+	col.add_child(bx)
+	var l := label(text, "label_medium", c("on_surface"))
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(l)
+	row.add_child(margin(col, 8, 8, 8, 8))
+	row.get_child(0).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_press_shrink_row(row)
+	return row
+
+
 # ------------------------------------------------------------------ helpers
 
 ## Tappable container that still lets the scroll view drag (taps < 10dp of movement).
@@ -505,6 +861,8 @@ class TapRow extends PanelContainer:
 	func _gui_input(event: InputEvent) -> void:
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
+				if _on_inner_button(self, event.global_position):
+					return   # a button inside the row takes this tap
 				_down = true
 				_down_at = event.global_position
 				pressed_changed.emit(true)
@@ -519,6 +877,14 @@ class TapRow extends PanelContainer:
 			_down = false
 			pressed_changed.emit(false)
 			queue_redraw()
+
+	static func _on_inner_button(n: Node, at: Vector2) -> bool:
+		for ch in n.get_children():
+			if ch is BaseButton and ch.is_visible_in_tree() and ch.get_global_rect().has_point(at):
+				return true
+			if ch is Control and _on_inner_button(ch, at):
+				return true
+		return false
 
 	func _draw() -> void:
 		if gradient_radius > 0.0:
