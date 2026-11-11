@@ -1,0 +1,6 @@
+game/.godot/
+tests/node_modules/
+*.apk
+*.idsig
+*.keystore
+build/

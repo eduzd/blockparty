@@ -1,0 +1,5 @@
+game/.godot/
+tests/
+assets_src/
+*.apk
+build/

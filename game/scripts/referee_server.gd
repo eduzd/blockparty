@@ -1,0 +1,395 @@
+class_name RefereeServer
+extends Node
+## Authoritative referee. Runs inside the app ("Host on this phone")
+## or headless on Render. Speaks small JSON messages over WebSocket.
+
+signal log_line(text: String)
+
+var port := 0
+var _tcp := TCPServer.new()
+var _pending: Array = []      # [{ws, since}]
+var _closing: Array = []      # [{ws, since}]
+var _clients := {}            # id -> Dictionary
+var _rooms := {}              # code -> Array[int]
+var _balls := {}              # code -> BallSim
+var _wind := {}               # code -> {now: Vector2, target: Vector2, next_change: float}
+var _clock := 0.0
+var _gravity := {}            # code -> {sign: float} (follows BeatClock)
+var balls_enabled := true
+var _next_id := 1
+var _snap_accum := 0.0
+
+
+func start(p_port: int, bind_address: String = "*") -> Error:
+	var err := _tcp.listen(p_port, bind_address)
+	if err == OK:
+		port = p_port
+		_log("Referee listening on port %d" % p_port)
+	else:
+		_log("Could not listen on port %d (error %d)" % [p_port, err])
+	return err
+
+
+func stop() -> void:
+	for id in _clients.keys():
+		_clients[id].ws.close(1001, "server stopping")
+	_clients.clear()
+	_rooms.clear()
+	_balls.clear()
+	_wind.clear()
+	_gravity.clear()
+	_pending.clear()
+	_tcp.stop()
+
+
+func is_running() -> bool:
+	return _tcp.is_listening()
+
+
+func player_count() -> int:
+	return _clients.size()
+
+
+func _process(delta: float) -> void:
+	if not _tcp.is_listening():
+		return
+	var now := Time.get_ticks_msec()
+	_accept_new(now)
+	_poll_pending(now)
+	_poll_clients(now)
+	_poll_closing(now)
+	_clock += delta
+	for room in _rooms.keys():
+		_update_wind(room, delta)
+		_update_gravity(room, now)
+	if balls_enabled:
+		for room in _balls.keys():
+			var feet := {}
+			for id in _rooms.get(room, []):
+				feet[id] = _clients[id].pos
+			_balls[room].wind = _wind[room].now
+			_balls[room].gravity_sign = _gravity[room].sign
+			for knock in _balls[room].advance(delta, feet, now / 1000.0):
+				_knock(knock[0], knock[1])
+	_snap_accum += delta
+	var step := 1.0 / Protocol.SNAPSHOT_HZ
+	if _snap_accum >= step:
+		_snap_accum = fmod(_snap_accum, step)
+		_broadcast_snapshots(now)
+
+
+func _accept_new(now: int) -> void:
+	while _tcp.is_connection_available():
+		var conn: StreamPeerTCP = _tcp.take_connection()
+		if _clients.size() + _pending.size() >= Protocol.MAX_CONNECTIONS:
+			conn.disconnect_from_host()
+			continue
+		var ws := WebSocketPeer.new()
+		ws.inbound_buffer_size = 8192
+		ws.outbound_buffer_size = 65536
+		if ws.accept_stream(conn) == OK:
+			_pending.append({"ws": ws, "since": now})
+
+
+func _poll_pending(now: int) -> void:
+	for i in range(_pending.size() - 1, -1, -1):
+		var entry: Dictionary = _pending[i]
+		var ws: WebSocketPeer = entry.ws
+		ws.poll()
+		var state := ws.get_ready_state()
+		if state == WebSocketPeer.STATE_OPEN:
+			_pending.remove_at(i)
+			var id := _next_id
+			_next_id += 1
+			_clients[id] = {
+				"id": id, "ws": ws, "name": "", "room": "", "color": 0,
+				"pos": Protocol.SPAWN, "yaw": 0.0,
+				"joined_at": now, "last_msg": now, "last_move": now,
+				"h_budget": Protocol.H_BUDGET_MAX, "up_budget": Protocol.UP_BUDGET_MAX,
+				"win_start": now, "win_count": 0, "bad": 0,
+			}
+		elif state == WebSocketPeer.STATE_CLOSED or now - int(entry.since) > Protocol.HELLO_TIMEOUT_MS:
+			# Also clears Render's plain TCP health probes.
+			ws.close()
+			_pending.remove_at(i)
+
+
+func _poll_clients(now: int) -> void:
+	for id in _clients.keys():
+		if not _clients.has(id):
+			continue
+		var c: Dictionary = _clients[id]
+		var ws: WebSocketPeer = c.ws
+		ws.poll()
+		if ws.get_ready_state() != WebSocketPeer.STATE_OPEN:
+			_remove(id, "disconnected")
+			continue
+		while _clients.has(id) and ws.get_available_packet_count() > 0:
+			var pkt := ws.get_packet()
+			_handle_packet(c, pkt, ws.was_string_packet(), now)
+		if not _clients.has(id):
+			continue
+		if c.room == "" and now - int(c.joined_at) > Protocol.HELLO_TIMEOUT_MS:
+			_kick(id, "hello_timeout", "No hello received")
+		elif now - int(c.last_msg) > Protocol.IDLE_TIMEOUT_MS:
+			_kick(id, "idle", "Timed out")
+
+
+func _poll_closing(now: int) -> void:
+	for i in range(_closing.size() - 1, -1, -1):
+		var ws: WebSocketPeer = _closing[i].ws
+		ws.poll()
+		if ws.get_ready_state() == WebSocketPeer.STATE_CLOSED or now - int(_closing[i].since) > 3000:
+			_closing.remove_at(i)
+
+
+func _handle_packet(c: Dictionary, pkt: PackedByteArray, is_text: bool, now: int) -> void:
+	var id: int = c.id
+	# Rate limit
+	if now - int(c.win_start) >= 1000:
+		c.win_start = now
+		c.win_count = 0
+	c.win_count += 1
+	if c.win_count > Protocol.MAX_MSGS_PER_SEC:
+		_kick(id, "rate_limit", "Too many messages")
+		return
+	if pkt.size() > Protocol.MAX_MESSAGE_BYTES:
+		_kick(id, "too_big", "Message too large")
+		return
+	var msg = Protocol.decode(pkt.get_string_from_utf8()) if is_text else null
+	if msg == null:
+		_bad(c, "bad_message")
+		return
+	c.last_msg = now
+	match msg.t:
+		"hello":
+			_on_hello(c, msg, now)
+		"state":
+			if c.room == "":
+				_bad(c, "not_in_room")
+			else:
+				_on_state(c, msg, now)
+		"ping":
+			var stamp = Protocol.parse_number(msg.get("c"))
+			_send(c, {"t": "pong", "c": stamp if stamp != null else 0})
+		_:
+			_bad(c, "unknown_type")
+
+
+func _on_hello(c: Dictionary, msg: Dictionary, now: int) -> void:
+	if c.room != "":
+		_bad(c, "already_joined")
+		return
+	if msg.get("v") != Protocol.VERSION and msg.get("v") != float(Protocol.VERSION):
+		_kick(c.id, "bad_version", "Please update the app")
+		return
+	var room := Protocol.sanitize_room(msg.get("room"))
+	var members: Array = _rooms.get(room, [])
+	if not _rooms.has(room) and _rooms.size() >= Protocol.MAX_ROOMS:
+		_kick(c.id, "server_full", "Server is full, try later")
+		return
+	if members.size() >= Protocol.MAX_PLAYERS_PER_ROOM:
+		_kick(c.id, "room_full", "Room %s is full (%d players)" % [room, Protocol.MAX_PLAYERS_PER_ROOM])
+		return
+	var used := {}
+	for other_id in members:
+		used[_clients[other_id].color] = true
+	var color := 0
+	while used.has(color):
+		color += 1
+	c.name = Protocol.sanitize_name(msg.get("name"))
+	c.room = room
+	c.color = color
+	var angle := TAU * float(members.size()) / Protocol.MAX_PLAYERS_PER_ROOM
+	c.pos = Protocol.SPAWN + Vector3(cos(angle), 0, sin(angle)) * 2.0
+	c.last_move = now
+	members.append(c.id)
+	_rooms[room] = members
+	if balls_enabled and not _balls.has(room):
+		_balls[room] = BallSim.new(room.hash())
+	if not _gravity.has(room):
+		_gravity[room] = {"sign": BeatClock.gravity_sign(now / 1000.0)}
+	if not _wind.has(room):
+		_wind[room] = {"now": Vector2.ZERO, "target": Vector2.ZERO, "next_change": _clock + randf_range(2.0, 5.0)}
+	if _balls.has(room):
+		_balls[room].on_player_spawned(c.id)
+	var others := []
+	for other_id in members:
+		if other_id != c.id:
+			others.append(_describe(_clients[other_id]))
+	_send(c, {"t": "welcome", "id": c.id, "room": room, "name": c.name, "c": color,
+		"spawn": Protocol.vec_to_array(c.pos), "max": Protocol.MAX_PLAYERS_PER_ROOM, "players": others,
+		"ball_radii": BallSim.RADII if balls_enabled else [], "g": _gravity[room].sign, "ts": now})
+	_broadcast(room, {"t": "join", "p": _describe(c)}, c.id)
+	_log("%s joined room %s (%d/%d)" % [c.name, room, members.size(), Protocol.MAX_PLAYERS_PER_ROOM])
+
+
+func _on_state(c: Dictionary, msg: Dictionary, now: int) -> void:
+	var target = Protocol.parse_vec3(msg.get("p"))
+	var yaw = Protocol.parse_number(msg.get("y"))
+	if target == null or yaw == null:
+		_bad(c, "bad_state")
+		return
+	var dt := clampf(float(now - int(c.last_move)) / 1000.0, 0.0, 1.0)
+	c.last_move = now
+	var wind_speed: float = _wind[c.room].now.length() if _wind.has(c.room) else 0.0
+	var h_rate := (Protocol.MOVE_SPEED + wind_speed + 1.0) * 1.35
+	c.h_budget = maxf(c.h_budget, minf(c.h_budget + h_rate * dt, Protocol.H_BUDGET_MAX))
+	c.up_budget = maxf(c.up_budget, minf(c.up_budget + Protocol.UP_BUDGET_RATE * dt, Protocol.UP_BUDGET_MAX))
+	c.yaw = wrapf(float(yaw), -PI, PI)
+
+	var current: Vector3 = c.pos
+	var g: float = _gravity[c.room].sign if _gravity.has(c.room) else 1.0
+	var in_grace: bool = now < int(c.get("grace_until", 0))
+	# Trampoline floor: anyone near the ground may be launched to the ceiling.
+	if g > 0.0 and (current.y < Protocol.TRAMPOLINE_ZONE_Y or target.y < Protocol.TRAMPOLINE_ZONE_Y):
+		c.up_budget = maxf(c.up_budget, Protocol.TRAMPOLINE_UP_BUDGET)
+	if in_grace:
+		c.up_budget = maxf(c.up_budget, Protocol.TRAMPOLINE_UP_BUDGET)
+	if target.y < Protocol.MIN_Y:
+		_correct(c, Protocol.SPAWN, "fell")
+		if _balls.has(c.room):
+			_balls[c.room].on_player_spawned(c.id)
+		return
+	var h_step := Vector2(target.x - current.x, target.z - current.z).length()
+	# "Up" means against gravity: falling is free, jumping costs budget.
+	var up_step := maxf((target.y - current.y) * g, 0.0)
+	if in_grace:
+		up_step = 0.0
+	if h_step > c.h_budget or up_step > c.up_budget:
+		_correct(c, current, "too_fast")
+		return
+	c.h_budget -= h_step
+	c.up_budget -= up_step
+	var clamped := Vector3(
+		clampf(target.x, -Protocol.WORLD_HALF, Protocol.WORLD_HALF),
+		clampf(target.y, Protocol.MIN_Y, Protocol.MAX_Y),
+		clampf(target.z, -Protocol.WORLD_HALF, Protocol.WORLD_HALF))
+	c.pos = clamped
+	if not clamped.is_equal_approx(target):
+		_correct(c, clamped, "out_of_bounds")
+
+
+func _correct(c: Dictionary, pos: Vector3, reason: String) -> void:
+	c.pos = pos
+	c.h_budget = Protocol.H_BUDGET_MAX
+	c.up_budget = Protocol.UP_BUDGET_MAX
+	_send(c, {"t": "correct", "p": Protocol.vec_to_array(pos), "why": reason})
+
+
+func _update_wind(room: String, delta: float) -> void:
+	var w: Dictionary = _wind[room]
+	if _clock >= float(w.next_change):
+		if w.target == Vector2.ZERO and randf() < 0.75:
+			# A gust: random direction and strength, lasting 1.5 to 3.5 s
+			w.target = Vector2.from_angle(randf() * TAU) * randf_range(3.0, Protocol.WIND_MAX)
+			w.next_change = _clock + randf_range(1.5, 3.5)
+		else:
+			w.target = Vector2.ZERO
+			w.next_change = _clock + randf_range(2.0, 6.0)
+	w.now = (w.now as Vector2).move_toward(w.target, Protocol.WIND_MAX * 1.5 * delta)
+
+
+func _update_gravity(room: String, now: int) -> void:
+	var gr: Dictionary = _gravity[room]
+	# Locked to the beat drop: same clock as the music and the origami fold.
+	var s := BeatClock.gravity_sign(now / 1000.0)
+	if s != float(gr.sign):
+		gr.sign = s
+		for id in _rooms[room]:
+			_clients[id].grace_until = now + Protocol.FLIP_GRACE_MS
+		_broadcast(room, {"t": "gravity", "g": gr.sign}, -1)
+		_log("Gravity flipped in room %s (%s)" % [room, "upside down" if gr.sign < 0.0 else "normal"])
+
+
+func _knock(id: int, velocity: Vector3) -> void:
+	if not _clients.has(id):
+		return
+	var c: Dictionary = _clients[id]
+	c.h_budget += Protocol.BUMP_BUDGET
+	c.up_budget += Protocol.BUMP_BUDGET
+	_send(c, {"t": "bump", "v": Protocol.vec_to_array(velocity)})
+
+
+func _broadcast_snapshots(now: int) -> void:
+	for room in _rooms.keys():
+		var list := []
+		for id in _rooms[room]:
+			var c: Dictionary = _clients[id]
+			var p: Vector3 = c.pos
+			list.append([id, snappedf(p.x, 0.01), snappedf(p.y, 0.01), snappedf(p.z, 0.01), snappedf(c.yaw, 0.01)])
+		var snap := {"t": "snap", "ts": now, "pl": list}
+		if _balls.has(room):
+			snap["b"] = _balls[room].to_array()
+		if _wind.has(room):
+			var w: Vector2 = _wind[room].now
+			snap["w"] = [snappedf(w.x, 0.01), snappedf(w.y, 0.01)]
+		if _gravity.has(room):
+			snap["g"] = _gravity[room].sign
+			snap["gn"] = snappedf(BeatClock.until_drop(now / 1000.0), 0.1)
+		_broadcast(room, snap, -1)
+
+
+func _describe(c: Dictionary) -> Dictionary:
+	return {"id": c.id, "name": c.name, "c": c.color, "p": Protocol.vec_to_array(c.pos), "y": snappedf(c.yaw, 0.01)}
+
+
+func _bad(c: Dictionary, code: String) -> void:
+	c.bad += 1
+	if c.bad > Protocol.MAX_BAD_MESSAGES:
+		_kick(c.id, "too_many_errors", "Too many invalid messages")
+	else:
+		_send(c, {"t": "error", "code": code})
+
+
+func _kick(id: int, code: String, text: String) -> void:
+	if not _clients.has(id):
+		return
+	var c: Dictionary = _clients[id]
+	_send(c, {"t": "error", "code": code, "msg": text, "fatal": true})
+	c.ws.close(4000, code)
+	_closing.append({"ws": c.ws, "since": Time.get_ticks_msec()})
+	_remove(id, code)
+
+
+func _remove(id: int, reason: String) -> void:
+	if not _clients.has(id):
+		return
+	var c: Dictionary = _clients[id]
+	_clients.erase(id)
+	if c.room != "" and _rooms.has(c.room):
+		var members: Array = _rooms[c.room]
+		members.erase(id)
+		if members.is_empty():
+			_rooms.erase(c.room)
+			_balls.erase(c.room)
+			_wind.erase(c.room)
+			_gravity.erase(c.room)
+		else:
+			_broadcast(c.room, {"t": "leave", "id": id}, -1)
+			if _balls.has(c.room):
+				_balls[c.room].forget_player(id)
+		_log("%s left room %s (%s)" % [c.name, c.room, reason])
+
+
+func _send(c: Dictionary, data: Dictionary) -> void:
+	var ws: WebSocketPeer = c.ws
+	if ws.get_ready_state() == WebSocketPeer.STATE_OPEN:
+		ws.send_text(Protocol.encode(data))
+
+
+func _broadcast(room: String, data: Dictionary, except_id: int) -> void:
+	if not _rooms.has(room):
+		return
+	var text := Protocol.encode(data)
+	for id in _rooms[room]:
+		if id == except_id:
+			continue
+		var ws: WebSocketPeer = _clients[id].ws
+		if ws.get_ready_state() == WebSocketPeer.STATE_OPEN:
+			ws.send_text(text)
+
+
+func _log(text: String) -> void:
+	print("[referee] ", text)
+	log_line.emit(text)
