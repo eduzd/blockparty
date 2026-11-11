@@ -61,6 +61,7 @@ func _load() -> void:
 	for k in ["name", "username", "bio"]:
 		if not (data.get(k) is String):
 			data[k] = ""
+	data.av = SocialHub.clean_av(data.get("av", -1))
 	if not (data.get("me") is Dictionary):
 		data.me = {}
 	_save_now()
@@ -216,7 +217,7 @@ func _process(_delta: float) -> void:
 
 func _send_hello() -> void:
 	var hello := {"t": "s_hello", "v": Protocol.VERSION, "key": data.key, "name": data.name,
-		"username": data.username, "bio": data.bio, "friends": data.friends.keys(),
+		"username": data.username, "bio": data.bio, "av": data.av, "friends": data.friends.keys(),
 		"follows": data.following.keys(), "req_out": data.req_out.keys()}
 	_ws.send_text(JSON.stringify(hello))
 
@@ -435,13 +436,15 @@ func unfriend(w: String) -> bool:
 	return _send({"t": "s_funfriend", "uid": w, "rid": _next_rid()})
 
 
-func save_profile(name: String, username: String, bio: String) -> bool:
+func save_profile(name: String, username: String, bio: String, av: int = -2) -> bool:
 	data.name = Protocol.sanitize_name(name)
+	if av != -2:
+		data.av = SocialHub.clean_av(av)
 	data.bio = SocialHub.clean_text(bio, 150)
 	var want := SocialHub.clean_username(username)
 	_save_now()
 	changed.emit()
-	return _send({"t": "s_profile", "name": data.name, "username": want, "bio": data.bio, "rid": _next_rid()})
+	return _send({"t": "s_profile", "name": data.name, "username": want, "bio": data.bio, "av": data.av, "rid": _next_rid()})
 
 
 func send_text(w: String, text: String) -> void:

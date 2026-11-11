@@ -51,6 +51,14 @@ static func valid_uid(v) -> bool:
 	return true
 
 
+## Built-in avatar index (0..29), or -1 for initials.
+static func clean_av(v) -> int:
+	if not (v is float or v is int):
+		return -1
+	var i := int(v)
+	return i if i >= 0 and i < 30 else -1
+
+
 static func clean_username(v) -> String:
 	var raw := (str(v) if v is String else "").to_lower()
 	var out := ""
@@ -117,7 +125,7 @@ func card(uid: String, viewer: String = "") -> Dictionary:
 	var u: Dictionary = users.get(uid, {})
 	var out := {
 		"uid": uid, "name": u.get("name", "Player"), "username": u.get("username", ""),
-		"bio": u.get("bio", ""), "online": _online(uid),
+		"bio": u.get("bio", ""), "av": int(u.get("av", -1)), "online": _online(uid),
 		"seen": int(u.get("last_seen", 0)),
 		"followers": _followers_of(uid), "following": follows.get(uid, {}).size(),
 		"friends": friends.get(uid, {}).size(),
@@ -178,6 +186,7 @@ func on_hello(cid: int, msg: Dictionary, now_unix: int) -> String:
 	var u: Dictionary = users.get(uid, {"uid": uid})
 	u.name = Protocol.sanitize_name(msg.get("name"))
 	u.bio = clean_text(msg.get("bio"), 150)
+	u.av = clean_av(msg.get("av"))
 	var want := clean_username(msg.get("username"))
 	u.username = _unique_username(want, uid)
 	u.cid = cid
@@ -275,6 +284,7 @@ func handle(cid: int, msg: Dictionary, now_unix: int) -> String:
 			var u: Dictionary = users[me]
 			u.name = Protocol.sanitize_name(msg.get("name"))
 			u.bio = clean_text(msg.get("bio"), 150)
+			u.av = clean_av(msg.get("av"))
 			var want := clean_username(msg.get("username"))
 			if want.length() < 3:
 				_send.call(cid, {"t": "s_profile_res", "rid": rid, "ok": false, "why": "short", "me": card(me)})

@@ -373,7 +373,9 @@ static func add_press_shrink_row(row: TapRow) -> void:
 
 
 ## Avatar: Sky circle with Ink initials at 38% of the size.
-static func avatar(size: float, name: String) -> Control:
+static func avatar(size: float, name: String, av: int = -1) -> Control:
+	if av >= 0 and av < AvatarArt.COUNT:
+		return AvatarArt.make(av, size)
 	var p := PanelContainer.new()
 	p.custom_minimum_size = Vector2(size, size)
 	p.add_theme_stylebox_override("panel", box(SKY, size / 2.0))
@@ -544,7 +546,9 @@ static func badge(count: int) -> Control:
 
 
 ## One navigation destination: 64x32 indicator pill (primary 14% when selected) with
-## a 24dp icon, then the 12sp label. Selected icon and label use primary.
+## a 24dp icon, then the 12sp label. Selected icon and label use primary. The parts are
+## kept on the row so nav_update can restyle it in place: the bar is built once and never
+## rebuilt, so it never jumps or flickers.
 static func _nav_item(item: Dictionary, selected: bool, cb: Callable, vertical_gap: float) -> Control:
 	var row := TapRow.new()
 	row.on_tap = cb
@@ -555,30 +559,23 @@ static func _nav_item(item: Dictionary, selected: bool, cb: Callable, vertical_g
 	var pill_box := PanelContainer.new()
 	pill_box.custom_minimum_size = Vector2(64, 32)
 	pill_box.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	pill_box.add_theme_stylebox_override("panel", box(Color(c("primary"), 0.14 if selected else 0.0), 16))
 	pill_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var tint := c("primary") if selected else c("on_surface_variant")
-	var ic := icon(str(item.icon), 24, tint)
+	var ic := icon(str(item.icon), 24, Color.WHITE)
 	ic.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	pill_box.add_child(ic)
-	var n := int(item.get("badge", 0))
-	if n > 0:
-		var holder := Control.new()
-		holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		holder.size_flags_horizontal = Control.SIZE_SHRINK_END
-		holder.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-		holder.custom_minimum_size = Vector2(0, 0)
-		pill_box.add_child(holder)
-		var bd := badge(n)
-		bd.position = Vector2(-22, 0)
-		holder.add_child(bd)
+	# The badge floats over the pill's top-right corner and takes no layout space.
+	var holder := Control.new()
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.set_anchors_preset(Control.PRESET_FULL_RECT)
+	var bd := badge(1)
+	bd.position = Vector2(38, 0)
+	bd.visible = false
+	holder.add_child(bd)
 	col.add_child(pill_box)
 	var l := Label.new()
 	l.text = str(item.label)
-	l.add_theme_font_override("font", font("dm", 600 if selected else 500))
 	l.add_theme_font_size_override("font_size", 12)
-	l.add_theme_color_override("font_color", tint)
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	l.clip_text = true
@@ -586,11 +583,57 @@ static func _nav_item(item: Dictionary, selected: bool, cb: Callable, vertical_g
 	col.add_child(l)
 	row.add_child(margin(col, 0, vertical_gap, 0, vertical_gap))
 	row.get_child(0).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(holder)
+	row.set_meta("parts", {"pill": pill_box, "icon": ic, "label": l, "badge": bd, "sel": null, "n": -1})
+	_nav_item_style(row, selected, int(item.get("badge", 0)))
 	return row
 
 
+static func _nav_item_style(row: Control, selected: bool, n: int) -> void:
+	var parts: Dictionary = row.get_meta("parts")
+	if parts.sel != selected:
+		parts.sel = selected
+		var tint := c("primary") if selected else c("on_surface_variant")
+		parts.pill.add_theme_stylebox_override("panel", box(Color(c("primary"), 0.14 if selected else 0.0), 16))
+		parts.icon.self_modulate = tint
+		parts.label.add_theme_font_override("font", font("dm", 600 if selected else 500))
+		parts.label.add_theme_color_override("font_color", tint)
+	if parts.n != n:
+		parts.n = n
+		var bd: Label = parts.badge
+		bd.visible = n > 0
+		bd.text = str(n) if n < 100 else "99+"
+		bd.reset_size()
+		_place_badge.call_deferred(row)
+
+
+## Puts the badge on the indicator pill's top-right corner once layout is done.
+static func _place_badge(row: Control) -> void:
+	if not is_instance_valid(row):
+		return
+	var parts: Dictionary = row.get_meta("parts")
+	var bd: Label = parts.badge
+	var pill: Control = parts.pill
+	var off := pill.get_global_rect().position - row.get_global_rect().position
+	var w := maxf(bd.size.x, 16.0)
+	bd.position = Vector2(off.x + 64.0 - w * 0.5 - 8.0, off.y - 4.0)
+
+
+## Restyles a nav bar or rail in place (selected tab, badges, gesture-bar inset).
+static func nav_update(nav: Control, items: Array, selected: int, bottom_inset: float = -1.0) -> void:
+	if nav == null or not is_instance_valid(nav):
+		return
+	var rows: Array = nav.get_meta("rows", [])
+	for i in mini(rows.size(), items.size()):
+		_nav_item_style(rows[i], i == selected, int(items[i].get("badge", 0)))
+	var sp = nav.get_meta("inset") if nav.has_meta("inset") else null
+	if bottom_inset >= 0.0 and sp != null and is_instance_valid(sp):
+		(sp as Control).custom_minimum_size.y = bottom_inset
+
+
 ## Bottom navigation bar (phones under 600dp): surfaceContainerLow, 80dp + the
-## gesture-bar inset, items share the width.
+## gesture-bar inset, items share the width. Its background runs behind the phone's own
+## navigation bar; the items always sit above it.
 static func nav_bar(items: Array, selected: int, cb: Callable, bottom_inset: float) -> Control:
 	var p := PanelContainer.new()
 	p.add_theme_stylebox_override("panel", box(c("surface_container_low"), 0))
@@ -602,11 +645,24 @@ static func nav_bar(items: Array, selected: int, cb: Callable, bottom_inset: flo
 	col.add_child(line)
 	var h := hbox(0)
 	h.custom_minimum_size = Vector2(0, 79)
+	var rows := []
 	for i in items.size():
-		h.add_child(_nav_item(items[i], i == selected, cb.bind(i), 12))
+		var it := _nav_item(items[i], i == selected, cb.bind(i), 12)
+		rows.append(it)
+		h.add_child(it)
 	col.add_child(h)
-	col.add_child(vspace(bottom_inset))
+	var sp := vspace(bottom_inset)
+	col.add_child(sp)
 	p.add_child(col)
+	p.set_meta("rows", rows)
+	p.set_meta("inset", sp)
+	# Badges are placed from the row width, which is only known after layout.
+	h.resized.connect(func():
+		for r in rows:
+			var parts: Dictionary = r.get_meta("parts")
+			var n: int = parts.n
+			parts.n = -1
+			_nav_item_style(r, bool(parts.sel), n))
 	return p
 
 
@@ -620,10 +676,19 @@ static func nav_rail(items: Array, selected: int, cb: Callable) -> Control:
 	var col := vbox(12)
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	col.alignment = BoxContainer.ALIGNMENT_CENTER
+	var rows := []
 	for i in items.size():
 		var it := _nav_item(items[i], i == selected, cb.bind(i), 4)
 		it.size_flags_horizontal = Control.SIZE_FILL
+		rows.append(it)
 		col.add_child(it)
+	p.set_meta("rows", rows)
+	col.resized.connect(func():
+		for r in rows:
+			var parts: Dictionary = r.get_meta("parts")
+			var n: int = parts.n
+			parts.n = -1
+			_nav_item_style(r, bool(parts.sel), n))
 	h.add_child(col)
 	var line := ColorRect.new()
 	line.color = c("outline_variant")
@@ -693,13 +758,13 @@ static func empty_state(icon_name: String, title: String, sub: String, action: C
 
 
 ## Avatar with a presence dot (success green with a background-coloured ring).
-static func avatar_presence(size: float, name: String, online: bool) -> Control:
+static func avatar_presence(size: float, name: String, online: bool, av: int = -1) -> Control:
 	var wrap := Control.new()
 	wrap.custom_minimum_size = Vector2(size, size)
 	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var av := avatar(size, name)
-	av.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	wrap.add_child(av)
+	var art := avatar(size, name, av)
+	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrap.add_child(art)
 	if online:
 		var d := maxf(10.0, size * 0.28)
 		var dot := Panel.new()
@@ -713,12 +778,12 @@ static func avatar_presence(size: float, name: String, online: bool) -> Control:
 
 ## Person row inside a card: avatar (with presence), name (titleMedium), sub line,
 ## optional trailing controls. The whole row taps unless cb is empty.
-static func person_row(name: String, sub: String, online: bool, cb: Callable, trailing: Array = [], sub_color: Color = Color(0, 0, 0, 0)) -> Control:
+static func person_row(name: String, sub: String, online: bool, cb: Callable, trailing: Array = [], sub_color: Color = Color(0, 0, 0, 0), av: int = -1) -> Control:
 	var row := TapRow.new()
 	row.on_tap = cb
 	var h := hbox(14)
 	h.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	h.add_child(avatar_presence(44, name, online))
+	h.add_child(avatar_presence(44, name, online, av))
 	var col := vbox(0)
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -752,12 +817,12 @@ static func small_button(text: String, filled: bool, cb: Callable, icon_name := 
 
 ## Profile header (16/10 margin, 24dp corners, surfaceContainer, 16dp padding, 72dp
 ## avatar, name titleLarge, @username primary). `actions` sit full width below.
-static func profile_header(name: String, username: String, bio: String, online: bool, actions: Array, note := "") -> Control:
+static func profile_header(name: String, username: String, bio: String, online: bool, actions: Array, note := "", av: int = -1) -> Control:
 	var p := PanelContainer.new()
 	p.add_theme_stylebox_override("panel", pad(box(c("surface_container"), 24, c("outline_variant"), 1), 16, 16))
 	var col := vbox(0)
 	var h := hbox(14)
-	h.add_child(avatar_presence(72, name, online))
+	h.add_child(avatar_presence(72, name, online, av))
 	var tc := vbox(2)
 	tc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tc.size_flags_vertical = Control.SIZE_SHRINK_CENTER

@@ -149,6 +149,8 @@ func _scaled_root(layer: CanvasLayer) -> Control:
 ## Sizes the dp roots to the safe area (clear of camera holes and the gesture bar)
 ## and re-lays out the HUD. Runs on every resize and orientation change.
 func _fit_roots() -> void:
+	ScreenUtil.configure(get_tree().root)
+	_sync_system_bars()
 	var vp := get_viewport()
 	var k := ScreenUtil.dp(vp)
 	var full := vp.get_visible_rect().size
@@ -162,6 +164,8 @@ func _fit_roots() -> void:
 				# keeps its own 16dp margins).
 				r.position = Vector2(ins.rl, ins.rt)
 				r.size = Vector2(full.x - ins.rl - ins.rr, full.y - ins.rt) / k
+				if shell and is_instance_valid(shell):
+					shell.set_bottom_inset(float(ins.rb) / k)
 			else:
 				r.position = Vector2(ins.l, ins.t)
 				r.size = Vector2(full.x - ins.l - ins.r, full.y - ins.t - ins.b) / k
@@ -198,6 +202,8 @@ func _build_menu() -> void:
 	menu_layer.add_child(bg)
 	menu_root = _scaled_root(menu_layer)
 	menu_root.mouse_filter = Control.MOUSE_FILTER_PASS
+	if not _revealed:
+		menu_root.modulate.a = 0.0
 	shell = AppShell.new(self, social, shell_state)
 	menu_root.add_child(shell)
 	_fit_roots()
@@ -222,6 +228,18 @@ func set_server(t: String) -> void:
 func _apply_theme() -> void:
 	var t := str(settings.get_value("p", "theme", "system"))
 	UiKit.dark = DisplayServer.is_dark_mode() if t == "system" else t == "dark"
+	_sync_system_bars()
+
+
+## The phone's own status and navigation bars stay visible like in any normal app. The
+## app draws behind them (edge to edge) and keeps its content inside the safe area; this
+## colour tells Android whether their icons should be dark (light page) or light.
+var _bar_color := Color(-1, -1, -1)
+func _sync_system_bars() -> void:
+	var col := UiKit.c("background") if world == null else Color(0.02, 0.02, 0.06)
+	if col != _bar_color:
+		_bar_color = col
+		DisplayServer.window_set_color(col)
 
 
 func set_theme(t: String) -> void:
@@ -326,6 +344,7 @@ func _enter_game() -> void:
 	clock_synced = false
 	world = Node3D.new()
 	add_child(world)
+	_sync_system_bars()
 	blocks = WorldBuilder.build(world)
 	blocks.clock = world_t
 	balls = BallView.new()
@@ -549,6 +568,7 @@ func _leave_game() -> void:
 	if world:
 		world.queue_free()
 		world = null
+		_sync_system_bars()
 	if hud_layer:
 		hud_layer.queue_free()
 		hud_layer = null
@@ -711,7 +731,30 @@ func _gravity_now() -> float:
 	return BeatClock.gravity_sign(world_t()) if clock_synced else server_gravity
 
 
+var _last_insets := {}
+var _insets_still := 0.0
+var _since_start := 0.0
+var _revealed := false
+func _watch_insets(delta: float) -> void:
+	# Android reports the status bar, cutout and navigation bar a moment after start and
+	# again when they change: re-fit at once, and keep the menu hidden until they have
+	# settled, so nothing visibly jumps when the app opens.
+	_since_start += delta
+	var ins := ScreenUtil.insets(get_viewport())
+	if ins != _last_insets:
+		_last_insets = ins
+		_insets_still = 0.0
+		_fit_roots()
+	else:
+		_insets_still += delta
+	if not _revealed and menu_root and (_insets_still > 0.2 or _since_start > 1.5):
+		_revealed = true
+		var tw := menu_root.create_tween()
+		tw.tween_property(menu_root, "modulate:a", 1.0, 0.2)
+
+
 func _process(delta: float) -> void:
+	_watch_insets(delta)
 	if world == null or player == null:
 		_autotest_tick(delta)
 		return

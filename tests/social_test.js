@@ -127,9 +127,13 @@ async function full() {
   b2.ws.close(); b3.ws.close();
   const bOld = b2; b2 = b4;
   // Edit profile
-  send(b2, { t: 's_profile', name: 'Benny', username: 'benny_' + tag, bio: 'new bio', rid: 9 });
+  send(b2, { t: 's_profile', name: 'Benny', username: 'benny_' + tag, bio: 'new bio', av: 17, rid: 9 });
   const pr = await wait(b2, m => m.t === 's_profile_res');
   ok(pr && pr.ok && pr.me.username === 'benny_' + tag && pr.me.name === 'Benny', 'profile edit saved');
+  ok(pr && pr.me.av === 17, 'avatar choice saved');
+  send(a, { t: 's_get', uid: b2.uid, rid: 91 });
+  const seen = await wait(a, m => m.t === 's_user' && m.user.uid === b2.uid);
+  ok(seen && seen.user.av === 17, 'others see the chosen avatar');
   send(c, { t: 's_profile', name: 'Cleo', username: 'benny_' + tag, bio: '', rid: 10 });
   const pr2 = await wait(c, m => m.t === 's_profile_res');
   ok(pr2 && pr2.ok === false && pr2.why === 'taken', 'someone else cannot take that username');

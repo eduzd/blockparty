@@ -4,16 +4,18 @@ config_version=5
 [application]
 
 config/name="Block Party"
-config/version="0.3.0"
+config/version="0.3.1"
 config/description="Friends-only multiplayer prototype"
 run/main_scene="res://main.tscn"
+boot_splash/bg_color=Color(1, 1, 1, 1)
+boot_splash/show_image=false
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.svg"
 
 [display]
 
-window/size/viewport_width=720
-window/size/viewport_height=720
+window/size/viewport_width=360
+window/size/viewport_height=360
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 window/handheld/orientation=1
@@ -27,6 +29,8 @@ pointing/emulate_mouse_from_touch=true
 common/physics_ticks_per_second=60
 
 [rendering]
+
+environment/defaults/default_clear_color=Color(1, 1, 1, 1)
 
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"

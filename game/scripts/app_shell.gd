@@ -85,7 +85,7 @@ func _on_resized() -> void:
 	if size.x <= 1.0:
 		return
 	var want_wide := size.x >= RAIL_DP
-	if want_wide != wide or absf(size.x - _built_width) > 40.0:
+	if want_wide != wide:
 		_rebuild()
 
 
@@ -148,12 +148,8 @@ func _make_nav() -> Control:
 func _refresh_nav() -> void:
 	if _nav == null or not is_instance_valid(_nav):
 		return
-	var idx := _nav.get_index()
-	var old := _nav
-	_nav = _make_nav()
-	_frame.add_child(_nav)
-	_frame.move_child(_nav, idx)
-	old.queue_free()
+	# Restyled in place: the bar itself is never rebuilt, so it never moves.
+	UiKit.nav_update(_nav, _nav_items(), int(state.tab), bottom_inset)
 
 
 func select_tab(i: int) -> void:
@@ -225,15 +221,18 @@ func _show_current(animate: bool, direction := 0) -> void:
 			_: node = UiKit.vbox()
 		node.set_anchors_preset(Control.PRESET_FULL_RECT)
 		bg.add_child(node)
+		# Screens with a text field lift themselves over the keyboard and the gesture
+		# bar (_kb_spacer); the rest simply stop above the phone's navigation bar.
+		if _kb_spacer == null:
+			node.offset_bottom = -bottom_inset
 		_screen_holder.add_child(bg)
 		node = bg
 	if animate:
+		# A short fade only: the page never slides, so its top bar stays exactly where
+		# it is, and the bottom bar is outside the page altogether.
 		node.modulate.a = 0.0
-		var shift := Vector2(28.0 * direction, 10.0 if direction == 0 else 0.0)
-		node.position = shift
-		var tw := node.create_tween().set_parallel(true).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-		tw.tween_property(node, "modulate:a", 1.0, 0.18)
-		tw.tween_property(node, "position", Vector2.ZERO, 0.24)
+		var tw := node.create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tw.tween_property(node, "modulate:a", 1.0, 0.22)
 
 
 func _mark_dirty() -> void:
@@ -261,6 +260,18 @@ func _live(box: VBoxContainer, fill: Callable) -> void:
 			box.remove_child(ch)
 			ch.queue_free()
 		fill.call(box)
+
+
+## Called by main whenever the phone's navigation bar inset changes (gesture bar vs
+## buttons, rotation): the bottom bar keeps its place and its items stay above it.
+func set_bottom_inset(v: float) -> void:
+	if absf(v - bottom_inset) > 0.5:
+		bottom_inset = v
+		UiKit.nav_update(_nav, _nav_items(), int(state.tab), bottom_inset)
+		if not state.stack.is_empty() and _kb_spacer == null:
+			for bg in _screen_holder.get_children():
+				if bg.get_child_count() > 0:
+					(bg.get_child(0) as Control).offset_bottom = -bottom_inset
 
 
 func _process(_delta: float) -> void:
@@ -424,7 +435,7 @@ func _connection_card() -> Control:
 # ------------------------------------------------------------------ tab: Home
 
 func _home() -> Control:
-	var av := UiKit.avatar(44, str(social.data.name))
+	var av := UiKit.avatar(44, str(social.data.name), int(social.data.get("av", -1)))
 	var av_btn := UiKit.TapRow.new()
 	av_btn.on_tap = func(): select_tab(3)
 	av_btn.add_child(av)
@@ -472,7 +483,7 @@ func _home() -> Control:
 				card[1].add_child(UiKit.person_row(str(u.get("name", "Player")), "Online", true,
 					func(): push({"k": "user", "uid": w}),
 					[UiKit.icon_button("chat-bubble-oval-left", func(): push({"k": "chat", "uid": w}), UiKit.c("primary"))],
-					UiKit.SUCCESS))
+					UiKit.SUCCESS, int(u.get("av", -1))))
 
 		var convos := _conversations()
 		if not convos.is_empty():
@@ -568,7 +579,7 @@ func _convo_row(cv: Dictionary) -> Control:
 	meta.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	trailing.append(meta)
 	return UiKit.person_row(str(u.get("name", "Player")), sub, bool(u.get("online", false)),
-		func(): push({"k": "chat", "uid": w}), trailing, UiKit.c("on_surface") if unread > 0 else Color(0, 0, 0, 0))
+		func(): push({"k": "chat", "uid": w}), trailing, UiKit.c("on_surface") if unread > 0 else Color(0, 0, 0, 0), int(u.get("av", -1)))
 
 
 func _chats() -> Control:
@@ -615,7 +626,7 @@ func _profile() -> Control:
 		var me: Dictionary = social.data.me
 		var edit := UiKit.outline_button("Edit profile", "pencil", func(): push({"k": "edit"}))
 		box.add_child(UiKit.profile_header(str(social.data.name), str(social.data.username), str(social.data.bio),
-			social.is_online(), [edit]))
+			social.is_online(), [edit], "", int(social.data.get("av", -1))))
 		var stats := UiKit.hbox(10)
 		stats.add_child(UiKit.stat_tile(social.data.friends.size(), "Friends", func(): push({"k": "list", "uid": social.uid, "kind": "friends"})))
 		stats.add_child(UiKit.stat_tile(int(me.get("followers", 0)), "Followers", func(): push({"k": "list", "uid": social.uid, "kind": "followers"})))
@@ -679,7 +690,7 @@ func _person(u: Dictionary, with_action := true) -> Control:
 		sub = (sub + "  ·  Online") if sub != "" else "Online"
 	var tr := [_row_action(u)] if with_action else []
 	return UiKit.person_row(str(u.get("name", "Player")), sub, online,
-		func(): if w != social.uid: push({"k": "user", "uid": w}), tr)
+		func(): if w != social.uid: push({"k": "user", "uid": w}), tr, Color(0, 0, 0, 0), int(u.get("av", -1)))
 
 
 # ------------------------------------------------------------------ screen: find people
@@ -779,7 +790,7 @@ func _user_screen(w: String) -> Control:
 		if r.friend:
 			note += "  ·  Friends"
 		box.add_child(UiKit.profile_header(str(u.get("name", "Player")), str(u.get("username", "")), str(u.get("bio", "")),
-			bool(u.get("online", false)), actions, note))
+			bool(u.get("online", false)), actions, note, int(u.get("av", -1))))
 		if r.req_in:
 			var dec := UiKit.text_button("Decline request", UiKit.c("on_surface_variant"), func(): _act(social.decline(w)))
 			dec.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -887,7 +898,7 @@ func _requests_screen() -> Control:
 				acc.pressed.connect(func(): acc.disabled = true; _act(social.accept(uid_w)))
 				var dec := UiKit.icon_button("x-mark", func(): _act(social.decline(uid_w)), UiKit.c("on_surface_variant"))
 				card[1].add_child(UiKit.person_row(str(u.get("name", "Player")), _handle(u), bool(u.get("online", false)),
-					func(): push({"k": "user", "uid": uid_w}), [acc, dec]))
+					func(): push({"k": "user", "uid": uid_w}), [acc, dec], Color(0, 0, 0, 0), int(u.get("av", -1))))
 		box.add_child(UiKit.section_title("Sent"))
 		if social.data.req_out.is_empty():
 			box.add_child(UiKit.margin(UiKit.label("You haven't sent any requests.", "body_medium", UiKit.c("on_surface_variant")), 20, 0, 20, 0))
@@ -902,7 +913,7 @@ func _requests_screen() -> Control:
 				var cancel := UiKit.small_button("Cancel", false, Callable())
 				cancel.pressed.connect(func(): cancel.disabled = true; _act(social.cancel_request(uid_w)))
 				card2[1].add_child(UiKit.person_row(str(u.get("name", "Player")), _handle(u), false,
-					func(): push({"k": "user", "uid": uid_w}), [cancel]))
+					func(): push({"k": "user", "uid": uid_w}), [cancel], Color(0, 0, 0, 0), int(u.get("av", -1))))
 		box.add_child(UiKit.margin(UiKit.label("Friends can message each other. Following someone doesn't need their OK.",
 			"body_small", UiKit.c("on_surface_variant")), 20, 16, 20, 0))
 	)
@@ -925,7 +936,7 @@ func _chat_screen(w: String) -> Control:
 	who.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var wh := UiKit.hbox(12)
 	wh.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	wh.add_child(UiKit.avatar_presence(40, str(u.get("name", "Player")), bool(u.get("online", false))))
+	wh.add_child(UiKit.avatar_presence(40, str(u.get("name", "Player")), bool(u.get("online", false)), int(u.get("av", -1))))
 	var tc := UiKit.vbox(0)
 	tc.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	tc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1145,15 +1156,56 @@ func _edit_screen() -> Control:
 	var save := UiKit.text_button("Save", UiKit.c("primary"), Callable())
 	var page := UiKit.pinned_page("Edit profile", pop, null, [save])
 	var content: VBoxContainer = page[1]
-	# 112dp avatar with a 3dp primary ring and a 5dp gap.
+	# 112dp avatar with a 3dp primary ring and a 5dp gap. It previews the pick live.
+	var chosen := [int(social.data.get("av", -1))]
 	var ring := PanelContainer.new()
 	ring.add_theme_stylebox_override("panel", UiKit.pad(UiKit.box(Color.TRANSPARENT, 64, UiKit.c("primary"), 3), 8, 8))
 	ring.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	ring.add_child(UiKit.avatar(112, str(social.data.name)))
+	ring.add_child(UiKit.avatar(112, str(social.data.name), chosen[0]))
 	content.add_child(UiKit.margin(ring, 0, 16, 0, 4))
-	var hint := UiKit.label("Your picture shows your initials.", "body_small", UiKit.c("on_surface_variant"))
+	var hint := UiKit.label("", "body_small", UiKit.c("on_surface_variant"))
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	content.add_child(hint)
+	# Avatar picker: your initials or one of the 30 buddies. The grid wraps to the
+	# screen width, so it fills portrait and landscape alike.
+	content.add_child(UiKit.section_title("Avatar"))
+	var flow := HFlowContainer.new()
+	flow.add_theme_constant_override("h_separation", 10)
+	flow.add_theme_constant_override("v_separation", 10)
+	flow.alignment = FlowContainer.ALIGNMENT_CENTER
+	var cells := []
+	var refresh := func():
+		for cell in cells:
+			var on: bool = int(cell.get_meta("av")) == chosen[0]
+			cell.get_child(0).add_theme_stylebox_override("panel",
+				UiKit.pad(UiKit.box(Color(UiKit.c("primary"), 0.14) if on else Color.TRANSPARENT, 34,
+					UiKit.c("primary") if on else Color.TRANSPARENT, 3), 4, 4))
+		var old_av := ring.get_child(0)
+		ring.remove_child(old_av)
+		old_av.queue_free()
+		ring.add_child(UiKit.avatar(112, str(social.data.name), chosen[0]))
+		hint.text = "Your initials" if chosen[0] < 0 else AvatarArt.NAMES[chosen[0]]
+	for i in range(-1, AvatarArt.COUNT):
+		var cell := UiKit.TapRow.new()
+		cell.set_meta("av", i)
+		cell.custom_minimum_size = Vector2(64, 64)
+		var frame := PanelContainer.new()
+		frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		frame.set_anchors_preset(Control.PRESET_FULL_RECT)
+		var art := UiKit.avatar(56, str(social.data.name), i)
+		art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		art.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		art.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		frame.add_child(art)
+		cell.add_child(frame)
+		var pick := i
+		cell.on_tap = func():
+			chosen[0] = pick
+			refresh.call()
+		cells.append(cell)
+		flow.add_child(cell)
+	content.add_child(UiKit.margin(flow, 16, 4, 16, 4))
+	refresh.call()
 	content.add_child(UiKit.section_title("Name"))
 	var nf: Array = UiKit.text_field("Your name", str(social.data.name), 16, "Shown to friends and above your player in games")
 	name_f = nf[1]
@@ -1189,7 +1241,7 @@ func _edit_screen() -> Control:
 		_set_edit_error("")
 		main.settings.set_value("p", "name", name_f.text)
 		main.settings.save(main.SETTINGS_PATH)
-		if social.save_profile(name_f.text, un, bio_f.text):
+		if social.save_profile(name_f.text, un, bio_f.text, chosen[0]):
 			save_big.disabled = true
 		else:
 			social.data.username = un
