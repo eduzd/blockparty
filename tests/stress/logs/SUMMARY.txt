@@ -1,0 +1,59 @@
+== q01
+step         plyr rooms verdict   rtt p50/95/99 age p50/95   gap p99 Hz mean/min srvCPU%  RSS MB thrtl ms  lg+ms  reasons
+q01_8           8     1 ok              4/7/7        1/1        56       20/20     4.3   127.3        0    0.8  
+q01_16         16     2 ok              4/7/7        1/2        56 19.98/19.98     6.6   127.3      965    0.8  
+q01_24         24     3 ok            4/19/64        1/4        94 19.98/19.98     8.8   127.3     5966    0.8  
+q01_24_r2      24     3 ok            4/40/85        1/2        95 19.84/19.83     9.0   127.3     4937    0.8  
+q01_24_r3      24     3 ok            4/42/86        1/5        94 19.99/19.98     8.7   127.4     5666    0.8  
+q01_28         28     4 DEGRADED     5/73/100       1/10       102 18.78/18.78    10.1   127.3    12703    0.9  srvGap p99 102; snap Hz 18.78
+q01_28_r2      28     4 DEGRADED      4/57/90        1/9       101 18.99/18.98     9.9   127.3    12520    0.8  srvGap p99 101; snap Hz 18.99
+q01_32         32     4 DEGRADED      7/79/94       1/10       104 18.15/18.15    10.7   127.3    21499    0.8  srvGap p99 104; snap Hz 18.15
+q01_32_r2      32     4 DEGRADED      5/83/93        1/9       108   18.1/18.1    10.6   127.4    16230    0.8  srvGap p99 108; snap Hz 18.1
+q01_40         40     5 DEGRADED   30/114/169      5/106       200 16.07/16.06    11.5   127.2    33052    0.8  rtt p95/p99 114/169; snapAge p95 106; srvGap p99 200; snap Hz 16.07
+q01_48         48     6 DEGRADED   49/166/267      7/199       295 12.11/12.11    11.7   127.2    35764    0.8  rtt p95/p99 166/267; snapAge p95 199; srvGap p99 295; snap Hz 12.11
+q01_64         64     8 DEGRADED   57/224/268      6/206       303 11.59/11.59    11.8   127.2    38848    0.8  rtt p95/p99 224/268; snapAge p95 206; srvGap p99 303; snap Hz 11.59
+q01_96         96    12 DEGRADED  152/344/437    196/399       494   3.37/3.37    13.0   127.2    42953    0.8  rtt p95/p99 344/437; snapAge p95 399; srvGap p99 494; snap Hz 3.37
+q01_128       128    16 DEGRADED  217/452/535    293/500       600     2.2/2.2    13.0   127.2    45536    0.8  rtt p95/p99 452/535; snapAge p95 500; srvGap p99 600; snap Hz 2.2
+q01_200       200    25 DEGRADED  410/818/919    502/806      1097      1.14/1    13.0   129.9    52448    0.8  71 disconnects; kicks {'rate_limit': 71}; rtt p95/p99 818/919; snapAge p95 806; srvGap p99 1097; snap Hz 1.14
+== qb
+step         plyr rooms verdict   rtt p50/95/99 age p50/95   gap p99 Hz mean/min srvCPU%  RSS MB thrtl ms  lg+ms  reasons
+qb_32          32     1 ok              4/7/7        1/1        56       20/20     7.5   126.6      381    0.9  
+qb_64          64     1 ok            4/39/65        1/4       100 19.65/19.65    10.0   126.6     9892    0.9  
+qb_100        100     1 DEGRADED     45/84/91       4/88       101 17.26/17.24    11.5   126.6    37508    0.9  srvGap p99 101; snap Hz 17.26
+== qr
+step         plyr rooms verdict   rtt p50/95/99 age p50/95   gap p99 Hz mean/min srvCPU%  RSS MB thrtl ms  lg+ms  reasons
+qr_6            6     3 ok              4/7/7        1/1        56       20/20     6.3   126.5      169    0.7  
+qr_8            8     4 ok            5/26/31        1/7       100 19.36/19.36     7.5   126.6     7244    0.7  
+qr_10          10     5 DEGRADED      5/30/38       1/98       103       18/18     8.6   126.6    10957    0.8  srvGap p99 103; snap Hz 18
+== qn
+step         plyr rooms verdict   rtt p50/95/99 age p50/95   gap p99 Hz mean/min srvCPU%  RSS MB thrtl ms  lg+ms  reasons
+qn_32          32     4 ok              4/7/7        0/1        56 19.99/19.97     4.8   126.6        0    0.8  
+qn_64          64     8 ok              4/7/7        1/1        56    20.01/20     7.6   126.6       14    0.9  
+qn_96          96    12 ok            4/22/40        1/2        80 19.99/19.98    10.8   126.5     8205    0.9  
+qn_128        128    16 ok           20/68/81        2/4        96 19.83/19.83    11.0   126.5    30274    0.9  
+qn_200        200    25 DEGRADED     41/88/92       5/90       101 15.15/15.13    12.0   129.0    43196    0.8  srvGap p99 101; snap Hz 15.15
+== c1
+step         plyr rooms verdict   rtt p50/95/99 age p50/95   gap p99 Hz mean/min srvCPU%  RSS MB thrtl ms  lg+ms  reasons
+c1_8            8     1 ok              4/7/7        1/1        56       20/20     4.2   127.4        0    0.7  
+c1_64          64     8 ok              4/7/8        1/3        56 20.01/20.01    21.0   127.3        0    1.9  
+c1_128        128    16 ok              4/7/8        2/3        56 19.99/19.98    35.5   127.3        0    1.9  
+c1_200        200    25 ok              3/6/7        2/3        56       20/20    50.1   129.2        0    0.9  
+c1_200_r2     200    25 ok              3/6/7        2/3        56    20/19.98    52.5   129.3        0    0.9  
+c1_216        216    27 DEGRADED        4/7/7        1/3        56       20/20    56.0   129.2        0    0.9  joins 200/216
+== cn
+step         plyr rooms verdict   rtt p50/95/99 age p50/95   gap p99 Hz mean/min srvCPU%  RSS MB thrtl ms  lg+ms  reasons
+cn_128        128    16 ok              3/7/7        1/2        56       20/20    13.4   126.5        0    0.9  
+== n1
+step         plyr rooms verdict   rtt p50/95/99 age p50/95   gap p99 Hz mean/min srvCPU%  RSS MB thrtl ms  lg+ms  reasons
+n1_300        300    38 ok            4/10/12        3/6        56 19.99/19.98    88.0   133.3        0    0.9  
+n1_300_r2     300    38 ok            4/10/14        4/7        57    20/19.97    88.1   133.1        0    1.0  
+n1_350        350    44 ok            4/13/19       4/11        61    20/19.98    96.1   135.6        0    0.9  
+n1_350_r2     350    44 ok            4/20/36       4/30        70       20/20    94.6   135.6        0    0.9  
+n1_400        400    50 DEGRADED      6/54/81       5/73       110  18.62/18.6    98.9   138.0        0    0.9  srvGap p99 110; snap Hz 18.62
+n1_600        600    75 DEGRADED   42/183/211     29/198       230     10.89/0    99.7   127.5        0    1.0  8 disconnects; kicks {'rate_limit': 8}; rtt p95/p99 183/211; snapAge p95 198; srvGap p99 230; snap Hz 10.89
+== b1
+step         plyr rooms verdict   rtt p50/95/99 age p50/95   gap p99 Hz mean/min srvCPU%  RSS MB thrtl ms  lg+ms  reasons
+b1_16          16     1 ok              4/7/7        0/1        56 19.99/19.99     5.2   126.0        0    0.8  
+b1_32          32     1 ok              4/7/7        1/2        56 19.99/19.99     7.2   126.5        0    0.9  
+b1_50          50     1 ok              4/7/7        1/1        56       20/20     9.0   126.6        0    0.9  
+b1_100        100     1 ok              3/7/7        1/2        56       20/20    15.1   126.5        0    1.0  

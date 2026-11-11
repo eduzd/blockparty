@@ -280,6 +280,7 @@ func set_bottom_inset(v: float) -> void:
 
 
 func _process(_delta: float) -> void:
+	_process_pop_preview(_delta)
 	if _kb_spacer and is_instance_valid(_kb_spacer):
 		var vp := get_viewport()
 		var kb := ScreenUtil.keyboard_height(vp) / ScreenUtil.dp(vp)
@@ -503,16 +504,133 @@ func _home() -> Control:
 
 # ------------------------------------------------------------------ tab: Games
 
+var _pop_preview_char: PopCharacter
+var _pop_preview_root: Node3D
+
+
+func _fill_pop_chars(flow: HFlowContainer) -> void:
+	for c in flow.get_children():
+		c.queue_free()
+	var cur := int(main.settings.get_value("p", "pop_ch", 0))
+	for i in PopRules.CHARACTERS.size():
+		var idx := i
+		flow.add_child(UiKit.chip(PopRules.character_name(i), i == cur, func():
+			main.settings.set_value("p", "pop_ch", idx)
+			main.settings.save(main.SETTINGS_PATH)
+			_fill_pop_chars(flow)
+			_set_preview_char(idx)))
+
+
+func _fill_pop_bots(flow: HFlowContainer) -> void:
+	for c in flow.get_children():
+		c.queue_free()
+	var cur := int(main.settings.get_value("p", "pop_bots", 3))
+	for n in PopRules.MAX_BOTS + 1:
+		var k := n
+		flow.add_child(UiKit.chip("None" if n == 0 else str(n), n == cur, func():
+			main.settings.set_value("p", "pop_bots", k)
+			main.settings.save(main.SETTINGS_PATH)
+			_fill_pop_bots(flow)))
+
+
+## A little 3D stage with your chosen character bouncing on it.
+func _pop_preview() -> Control:
+	var svc := SubViewportContainer.new()
+	svc.stretch = true
+	svc.custom_minimum_size = Vector2(0, 170)
+	svc.mouse_filter = Control.MOUSE_FILTER_PASS
+	var vp := SubViewport.new()
+	vp.own_world_3d = true
+	vp.transparent_bg = true
+	vp.msaa_3d = Viewport.MSAA_2X
+	vp.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
+	svc.add_child(vp)
+	_pop_preview_root = Node3D.new()
+	vp.add_child(_pop_preview_root)
+	var cam := Camera3D.new()
+	cam.fov = 40
+	cam.transform = Transform3D(Basis.looking_at(Vector3(0, 0.95, 0) - Vector3(0, 1.35, 3.4)), Vector3(0, 1.35, 3.4))
+	_pop_preview_root.add_child(cam)
+	var sun := DirectionalLight3D.new()
+	sun.rotation_degrees = Vector3(-40, -35, 0)
+	_pop_preview_root.add_child(sun)
+	var env := WorldEnvironment.new()
+	var e := Environment.new()
+	e.background_mode = Environment.BG_CLEAR_COLOR
+	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	e.ambient_light_color = Color("#dfefff")
+	e.ambient_light_energy = 0.7
+	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	env.environment = e
+	_pop_preview_root.add_child(env)
+	var disc := MeshInstance3D.new()
+	var dm := CylinderMesh.new()
+	dm.top_radius = 0.95
+	dm.bottom_radius = 1.0
+	dm.height = 0.12
+	disc.mesh = dm
+	disc.material_override = PopCharacter.mat(UiKit.SKY_LIGHT)
+	disc.position.y = -0.06
+	_pop_preview_root.add_child(disc)
+	_set_preview_char(int(main.settings.get_value("p", "pop_ch", 0)))
+	return svc
+
+
+func _set_preview_char(i: int) -> void:
+	if _pop_preview_root == null or not is_instance_valid(_pop_preview_root):
+		return
+	if _pop_preview_char and is_instance_valid(_pop_preview_char):
+		_pop_preview_char.queue_free()
+	_pop_preview_char = PopCharacter.new()
+	_pop_preview_root.add_child(_pop_preview_char)
+	_pop_preview_char.setup(PopRules.character_name(i), i, Protocol.color_for(i), false)
+	_pop_preview_char.rotation.y = 0.5
+	_pop_preview_char.lunge()
+
+
+func _process_pop_preview(delta: float) -> void:
+	if _pop_preview_char == null or not is_instance_valid(_pop_preview_char) or not _pop_preview_char.is_visible_in_tree():
+		return
+	_pop_preview_char.facing_yaw = _pop_preview_char.facing_yaw + delta * 0.6
+	_pop_preview_char.animate(delta, Vector3.ZERO, true)
+
 func _games() -> Control:
 	var page := UiKit.pinned_page("Games", Callable())
 	var content: VBoxContainer = page[1]
 	var room_now := Protocol.sanitize_room(main.settings.get_value("p", "room", Protocol.DEFAULT_ROOM))
-	var hero := UiKit.hero_card("Neon Bounce", "Gravity flips on the drop. Play online in room %s" % room_now, "play", main._on_play_online)
-	content.add_child(hero)
-	main.menu_buttons.append(hero)
+	# Pop-Up Panic: the new party game, first.
+	var pop_hero := UiKit.hero_card("Pop-Up Panic", "New! Bonk weird heads off a sky picnic table. Play online in room %s" % room_now, "sparkles", main._on_pop_online)
+	content.add_child(pop_hero)
+	main.menu_buttons.append(pop_hero)
 	main.menu_status = UiKit.label("", "body_medium", UiKit.c("error"))
 	main.menu_status.visible = false
 	content.add_child(UiKit.margin(main.menu_status, 20, 0, 20, 0))
+	var pc: Array = UiKit.card()
+	content.add_child(pc[0])
+	var solo_row := UiKit.setting_row("bolt", "Practice with bots",
+		"No friends around? Play right now on this phone, no internet needed", "", UiKit.PINK, main._on_pop_solo)
+	pc[1].add_child(solo_row)
+	main.menu_buttons.append(solo_row)
+	pc[1].add_child(UiKit.margin(UiKit.label("Your character", "title_small", UiKit.c("on_surface"), false), 16, 12, 16, 4))
+	pc[1].add_child(_pop_preview())
+	var ch_flow := HFlowContainer.new()
+	ch_flow.add_theme_constant_override("h_separation", 8)
+	ch_flow.add_theme_constant_override("v_separation", 8)
+	pc[1].add_child(UiKit.margin(ch_flow, 16, 8, 16, 4))
+	_fill_pop_chars(ch_flow)
+	pc[1].add_child(UiKit.margin(UiKit.label("Bots in your room", "title_small", UiKit.c("on_surface"), false), 16, 12, 16, 4))
+	var bot_flow := HFlowContainer.new()
+	bot_flow.add_theme_constant_override("h_separation", 8)
+	bot_flow.add_theme_constant_override("v_separation", 8)
+	pc[1].add_child(UiKit.margin(bot_flow, 16, 4, 16, 4))
+	_fill_pop_bots(bot_flow)
+	pc[1].add_child(UiKit.margin(UiKit.label("Online, bots fill the room until friends join. Practice always has at least one.",
+		"body_small", UiKit.c("on_surface_variant")), 16, 4, 16, 16))
+
+	var hero := UiKit.hero_card("Neon Bounce", "Gravity flips on the drop. Play online in room %s" % room_now, "play", main._on_play_online)
+	content.add_child(UiKit.vspace(8))
+	content.add_child(hero)
+	main.menu_buttons.append(hero)
 
 	content.add_child(UiKit.section_title("Room"))
 	var rm: Array = UiKit.text_field("Room code", room_now, 6, "Everyone with the same code plays together")
@@ -540,7 +658,7 @@ func _games() -> Control:
 	main.menu_buttons.append(join_btn)
 
 	content.add_child(UiKit.section_title("More games"))
-	content.add_child(UiKit.margin(UiKit.label("Making and sharing your own games comes in a later update. For now, Neon Bounce is the one world.",
+	content.add_child(UiKit.margin(UiKit.label("Making and sharing your own games comes in a later update. For now there are two: Pop-Up Panic and Neon Bounce.",
 		"body_medium", UiKit.c("on_surface_variant")), 20, 0, 20, 0))
 	_kb_spacer = UiKit.vspace(bottom_inset)
 	content.add_child(_kb_spacer)

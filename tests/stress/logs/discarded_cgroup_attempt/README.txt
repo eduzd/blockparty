@@ -1,0 +1,1 @@
+These runs were meant to use a 0.1 CPU cgroup, but this VM refused to place the server in the cgroup, so they actually ran with no CPU limit. Kept for reference only; superseded by the q01_* (cpu_quota.py) and c1_* (one core) ladders.

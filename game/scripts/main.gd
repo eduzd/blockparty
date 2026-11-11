@@ -59,6 +59,8 @@ var mode := ""     # "online", "host", "friend"
 var server_offset_ms := 0.0
 var clock_synced := false
 var server_gravity := 1.0
+var game := "neon"   # which game the next join asks for: "neon" or "pop" (Pop-Up Panic)
+var pop: PopGame
 
 # Self-test (used by the cloud checks, never by players)
 var autotest := ""
@@ -293,7 +295,36 @@ func _on_play_online() -> void:
 	if not url.begins_with("ws://") and not url.begins_with("wss://"):
 		url = "wss://" + url.trim_prefix("https://").trim_prefix("http://")
 	mode = "online"
+	game = "neon"
 	_connect(url)
+
+
+## Pop-Up Panic online: same room code as everyone else, its own rooms on the server.
+func _on_pop_online() -> void:
+	var url := server_url()
+	if url == "" or url.contains("YOUR-SERVICE"):
+		_status("Add the server address first, in Profile > Settings.")
+		return
+	if not url.begins_with("ws://") and not url.begins_with("wss://"):
+		url = "wss://" + url.trim_prefix("https://").trim_prefix("http://")
+	mode = "online"
+	game = "pop"
+	_connect(url)
+
+
+## Pop-Up Panic against bots, entirely on this phone: no internet or friends needed.
+func _on_pop_solo() -> void:
+	host_server = RefereeServer.new()
+	host_server.balls_enabled = false
+	add_child(host_server)
+	if host_server.start(Protocol.DEFAULT_PORT + 1, "127.0.0.1") != OK:
+		host_server.queue_free()
+		host_server = null
+		_status("Couldn't start practice mode.")
+		return
+	mode = "solo"
+	game = "pop"
+	_connect("ws://127.0.0.1:%d" % (Protocol.DEFAULT_PORT + 1))
 
 
 func _on_host() -> void:
@@ -305,6 +336,7 @@ func _on_host() -> void:
 		_status("Couldn't start hosting on port %d." % Protocol.DEFAULT_PORT)
 		return
 	mode = "host"
+	game = "neon"
 	_connect("ws://127.0.0.1:%d" % Protocol.DEFAULT_PORT)
 
 
@@ -314,6 +346,7 @@ func _on_join_friend() -> void:
 		_status("Type your friend's IP address (shown on their screen).")
 		return
 	mode = "friend"
+	game = "neon"
 	var url := ip if ip.begins_with("ws") else "ws://%s" % ip
 	if not ip.begins_with("ws") and not ip.contains(":"):
 		url += ":%d" % Protocol.DEFAULT_PORT
@@ -324,7 +357,15 @@ func _connect(url: String) -> void:
 	_save_settings()
 	_set_menu_busy(true)
 	_status("Connecting...", false)
-	net.join(url, _player_name(), Protocol.sanitize_room(str(settings.get_value("p", "room", Protocol.DEFAULT_ROOM))))
+	var room := Protocol.sanitize_room(str(settings.get_value("p", "room", Protocol.DEFAULT_ROOM)))
+	var extra := {}
+	if game == "pop":
+		var bots := int(settings.get_value("p", "pop_bots", 3))
+		if mode == "solo":
+			room = "SOLO"
+			bots = maxi(bots, 1)
+		extra = {"g": "pop", "ch": int(settings.get_value("p", "pop_ch", 0)), "bots": bots}
+	net.join(url, _player_name(), room, extra)
 
 
 func _local_ips() -> Array:
@@ -345,17 +386,22 @@ func _enter_game() -> void:
 	world = Node3D.new()
 	add_child(world)
 	_sync_system_bars()
-	blocks = WorldBuilder.build(world)
-	blocks.clock = world_t
-	balls = BallView.new()
-	world.add_child(balls)
-	music = Music.new()
-	music.clock = world_t
-	world.add_child(music)
-	walls = PulseWalls.new()
-	walls.music = music
-	walls.clock = world_t
-	world.add_child(walls)
+	if game == "pop":
+		pop = PopGame.new(self)
+		world.add_child(pop)
+		pop.build()
+	else:
+		blocks = WorldBuilder.build(world)
+		blocks.clock = world_t
+		balls = BallView.new()
+		world.add_child(balls)
+		music = Music.new()
+		music.clock = world_t
+		world.add_child(music)
+		walls = PulseWalls.new()
+		walls.music = music
+		walls.clock = world_t
+		world.add_child(walls)
 	camera = Camera3D.new()
 	camera.keep_aspect = Camera3D.KEEP_HEIGHT
 	world.add_child(camera)
@@ -368,6 +414,10 @@ func _enter_game() -> void:
 	hud_layer.add_child(touch)
 	touch.show_touch = DisplayServer.is_touchscreen_available() or autotest != ""
 	touch.jump.connect(_on_jump)
+	if pop:
+		touch.action_label = "BONK"
+		touch.jump_label = "HOP"
+		touch.action.connect(pop.on_bonk)
 	hud_root = _scaled_root(hud_layer)
 	# Top-left: room info, host addresses and voice status, stacked.
 	hud_info_col = VBoxContainer.new()
@@ -412,6 +462,8 @@ func _enter_game() -> void:
 	hud_toast.modulate.a = 0.0
 	hud_toast.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hud_root.add_child(hud_toast)
+	if pop:
+		pop.build_hud(hud_root)
 	_refresh_voice_ui()
 	_fit_roots()
 
@@ -474,6 +526,8 @@ func _layout_hud() -> void:
 		p.size = Vector2.ZERO
 	hud_banner.position = Vector2((w - hud_banner.get_combined_minimum_size().x) / 2.0, center_top + 52.0)
 	hud_toast.position = Vector2((w - hud_toast.get_combined_minimum_size().x) / 2.0, center_top + 96.0)
+	if pop:
+		pop.layout_hud(w, hud_root.size.y, center_top)
 	if touch:
 		var rects: Array[Rect2] = []
 		var k := ScreenUtil.dp(get_viewport())
@@ -554,7 +608,9 @@ func _camera_targets(snap: bool) -> void:
 
 
 func _on_jump() -> void:
-	if player:
+	if pop:
+		pop.on_jump()
+	elif player:
 		player.jump_pressed = true
 
 
@@ -580,6 +636,7 @@ func _leave_game() -> void:
 	touch = null
 	camera = null
 	player = null
+	pop = null
 	music = null
 	remotes.clear()
 	menu_layer.visible = true
@@ -593,6 +650,11 @@ func _on_joined(welcome: Dictionary) -> void:
 		remotes[id].queue_free()
 	remotes.clear()
 	_sync_clock(welcome.get("ts"))
+	if pop:
+		pop.on_welcome(welcome)
+		hud_banner.visible = false
+		voice.on_joined(welcome)
+		return
 	var spawn = Protocol.parse_vec3(welcome.get("spawn"))
 	if spawn == null:
 		spawn = Protocol.SPAWN
@@ -629,6 +691,9 @@ func _on_message(msg: Dictionary) -> void:
 	if world == null:
 		return
 	if voice.on_message(msg):
+		return
+	if pop:
+		pop.on_message(msg)
 		return
 	match msg.t:
 		"snap":
@@ -755,6 +820,11 @@ func _watch_insets(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	_watch_insets(delta)
+	if pop and world and camera:
+		pop.frame(delta, camera)
+		_update_hud_info()
+		_autotest_tick(delta)
+		return
 	if world == null or player == null:
 		_autotest_tick(delta)
 		return
@@ -776,20 +846,7 @@ func _process(delta: float) -> void:
 	var offset := Vector3(0, 0, cam_dist).rotated(Vector3.RIGHT, cam_pitch * player.gravity_sign).rotated(Vector3.UP, cam_yaw)
 	camera.global_position = pivot + offset
 	camera.look_at(pivot, up)
-	# HUD
-	var ping := ("%d ms" % net.latency_ms) if net.latency_ms >= 0 else "..."
-	var info := "Room %s  ·  %d players  ·  %s" % [net.room, remotes.size() + 1, ping]
-	var hosts := ""
-	if mode == "host":
-		var ips := _local_ips()
-		hosts = "Friends join: %s" % (", ".join(ips) if not ips.is_empty() else "turn on Wi-Fi or hotspot")
-	if hud_info.text != info or hud_hosts.text != hosts:
-		hud_info.text = info
-		hud_hosts.text = hosts
-		hud_hosts.visible = hosts != ""
-		_layout_hud()
-	if voice.is_on():
-		_refresh_voice_ui()
+	_update_hud_info()
 	var t := world_t()
 	var until := BeatClock.until_drop(t)
 	var since := BeatClock.since_drop(t)
@@ -802,7 +859,28 @@ func _process(delta: float) -> void:
 	_autotest_tick(delta)
 
 
+func _update_hud_info() -> void:
+	var ping := ("%d ms" % net.latency_ms) if net.latency_ms >= 0 else "..."
+	var info := "Room %s  ·  %d players  ·  %s" % [net.room, remotes.size() + 1, ping]
+	if mode == "solo":
+		info = "Practice  ·  you + %d bots" % remotes.size()
+	var hosts := ""
+	if mode == "host":
+		var ips := _local_ips()
+		hosts = "Friends join: %s" % (", ".join(ips) if not ips.is_empty() else "turn on Wi-Fi or hotspot")
+	if hud_info.text != info or hud_hosts.text != hosts:
+		hud_info.text = info
+		hud_hosts.text = hosts
+		hud_hosts.visible = hosts != ""
+		_layout_hud()
+	if voice.is_on():
+		_refresh_voice_ui()
+
+
 func _physics_process(delta: float) -> void:
+	if pop:
+		pop.physics(delta)
+		return
 	if player == null:
 		return
 	if autotest == "":
@@ -826,16 +904,22 @@ func _layout_report() -> String:
 	var problems := []
 	if hud_buttons:
 		items["buttons"] = hud_buttons.get_global_rect()
-		for p in [["info", hud_info], ["hosts", hud_hosts], ["voice", hud_voice]]:
+		var pills := [["info", hud_info], ["hosts", hud_hosts], ["voice", hud_voice]]
+		if pop and pop.leader_pill:
+			pills.append(["leader", pop.leader_pill])
+		for p in pills:
 			if p[1].visible and p[1].text != "":
 				items[p[0]] = p[1].get_global_rect()
 		if touch and touch.show_touch:
 			var sr := touch.stick_radius()
-			var jr := touch.jump_radius()
 			var sh := touch._stick_home()
-			var jc := touch._jump_center()
 			items["stick"] = Rect2(sh - Vector2(sr, sr), Vector2(sr, sr) * 2.0)
-			items["jump"] = Rect2(jc - Vector2(jr, jr), Vector2(jr, jr) * 2.0)
+			var br: Array = touch.button_rects()
+			items["jump"] = br[0]
+			if br.size() > 1:
+				items["bonk"] = br[1]
+		if pop:
+			items.merge(pop.layout_items())
 	elif menu_root:
 		# The tabs run edge to edge, so the menu is checked against the real insets
 		# (camera cutout, status bar) without the 8dp minimum the HUD uses.
@@ -850,7 +934,14 @@ func _layout_report() -> String:
 	var names := items.keys()
 	for i in names.size():
 		for j in range(i + 1, names.size()):
-			if items[names[i]].grow(-0.5).intersects(items[names[j]].grow(-0.5)):
+			var ri: Rect2 = items[names[i]]
+			var rj: Rect2 = items[names[j]]
+			if [names[i], names[j]].has("jump") and [names[i], names[j]].has("bonk"):
+				# Two round buttons: compare their circles (and the touch zones around them).
+				var gap := ri.get_center().distance_to(rj.get_center()) - ri.size.x * 0.5 * 1.3 - rj.size.x * 0.5 * 1.2
+				if gap < 0.0:
+					problems.append("jump touch zone overlaps bonk by %.1f px" % -gap)
+			elif ri.grow(-0.5).intersects(rj.grow(-0.5)):
 				problems.append("%s overlaps %s" % [names[i], names[j]])
 	var parts := []
 	for n in items:
@@ -865,6 +956,18 @@ func _start_autotest() -> void:
 		social.data.name = "Bot%d" % (OS.get_process_id() % 1000)
 	if autotest == "host" or autotest == "host_rotate":
 		_on_host()
+	elif autotest.begins_with("pop_solo"):
+		settings.set_value("p", "pop_bots", int(OS.get_environment("POP_BOTS")) if OS.has_environment("POP_BOTS") else 4)
+		settings.set_value("p", "pop_ch", OS.get_process_id() % 8)
+		_on_pop_solo()
+	elif autotest.begins_with("popjoin:"):
+		settings.set_value("p", "pop_bots", int(OS.get_environment("POP_BOTS")) if OS.has_environment("POP_BOTS") else 0)
+		settings.set_value("p", "pop_ch", OS.get_process_id() % 8)
+		if OS.has_environment("POP_ROOM"):
+			settings.set_value("p", "room", OS.get_environment("POP_ROOM"))
+		mode = "online"
+		game = "pop"
+		_connect(autotest.substr(8))
 	elif autotest == "menu" or autotest.begins_with("social"):
 		_autotest_social_setup()
 	elif autotest.begins_with("join:"):
@@ -879,6 +982,8 @@ func _autotest_tick(delta: float) -> void:
 	if autotest.ends_with("_rotate") and autotest_t > 3.0 and not has_meta("rotated"):
 		set_meta("rotated", true)
 		_set_orientation("portrait" if orientation == "landscape" else "landscape")
+	if pop and pop.me:
+		_autotest_pop(delta)
 	if player:
 		# Walk in a slow circle and hop, like a player would.
 		player.move_input = Vector2(sin(autotest_t * 0.8), cos(autotest_t * 0.8))
@@ -887,8 +992,24 @@ func _autotest_tick(delta: float) -> void:
 	var limit := float(OS.get_environment("AUTOTEST_SECONDS")) if OS.has_environment("AUTOTEST_SECONDS") else 12.0
 	if autotest.begins_with("social") or autotest == "menu":
 		_autotest_social_tick()
+	if autotest == "menu" and OS.has_environment("AUTOTEST_TAB") and shell and autotest_t > 1.0 and not has_meta("tab_done"):
+		set_meta("tab_done", true)
+		shell.select_tab(int(OS.get_environment("AUTOTEST_TAB")))
+	if autotest == "menu" and OS.has_environment("AUTOTEST_TAP_SOLO") and autotest_t > 3.0 and not has_meta("solo_done"):
+		set_meta("solo_done", true)
+		autotest = "pop_solo_from_menu"
+		_on_pop_solo()
 	if (autotest == "menu" or autotest.begins_with("social")) and autotest_t > limit:
 		_dump_ui()
+		print("AUTOTEST LAYOUT ", _layout_report())
+		if OS.has_environment("AUTOTEST_SHOT"):
+			get_viewport().get_texture().get_image().save_png(OS.get_environment("AUTOTEST_SHOT"))
+		get_tree().quit()
+		return
+	if autotest_t > limit and pop:
+		print("AUTOTEST POP in_room=%s id=%d others=%d phase=%s round=%d left=%.1f frenzy=%.2f pos=%s out=%s stats=%s scores=%s" % [
+			net.is_in_room(), net.my_id, remotes.size(), pop.phase, pop.round_no, pop.time_left(), pop.frenzy(),
+			str(pop.me.position) if pop.me else "none", str(pop.me.out) if pop.me else "-", str(pop.stats), str(pop.scores)])
 		print("AUTOTEST LAYOUT ", _layout_report())
 		if OS.has_environment("AUTOTEST_SHOT"):
 			get_viewport().get_texture().get_image().save_png(OS.get_environment("AUTOTEST_SHOT"))
@@ -909,6 +1030,34 @@ func _autotest_tick(delta: float) -> void:
 		if OS.has_environment("AUTOTEST_SHOT"):
 			get_viewport().get_texture().get_image().save_png(OS.get_environment("AUTOTEST_SHOT"))
 		get_tree().quit()
+
+
+## Plays Pop-Up Panic like a (slightly aimless) person: chase the nearest
+## character, bonk when close, hop now and then; turn the screen if asked.
+func _autotest_pop(_delta: float) -> void:
+	var me: PopPlayer = pop.me
+	var target := Vector3.ZERO
+	var best := INF
+	for r in remotes.values():
+		var d: float = r.position.distance_to(me.position)
+		if r.visible and d < best and PopRules.on_table(r.position):
+			best = d
+			target = r.position
+	var to := Vector3(target.x - me.position.x, 0, target.z - me.position.z)
+	var r_me := Vector2(me.position.x, me.position.z).length()
+	if r_me > PopRules.ARENA_R - 2.0:
+		to = -Vector3(me.position.x, 0, me.position.z)
+	# Turn world direction into stick input relative to the camera.
+	var fwd := Vector3(-sin(pop.cam_yaw), 0, -cos(pop.cam_yaw))
+	var right := Vector3(cos(pop.cam_yaw), 0, -sin(pop.cam_yaw))
+	var dn := to.normalized() if to.length() > 0.01 else Vector3.ZERO
+	me.move_input = Vector2(dn.dot(right), dn.dot(fwd)) * (0.9 if best > 1.6 else 0.3)
+	if best < PopRules.BONK_RANGE and fmod(autotest_t, 0.7) < 0.02:
+		pop.on_bonk()
+	if fmod(autotest_t, 3.1) < 0.02:
+		me.jump_pressed = true
+	if OS.has_environment("POP_LOOK") and fmod(autotest_t, 5.0) < 2.5:
+		touch.look_delta += Vector2(3.0, 0.0)
 
 
 # ------------------------------------------------------------- UI autotest

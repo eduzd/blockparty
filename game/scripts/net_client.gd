@@ -21,6 +21,8 @@ var room := ""
 var my_id := -1
 var latency_ms := -1
 var ever_joined := false
+## Extra fields for the hello (which game, bots, character). Empty for the neon world.
+var hello_extra := {}
 
 var _ws: WebSocketPeer
 var _attempt := 0
@@ -31,7 +33,8 @@ var _last_rx := 0
 var _last_ping := 0
 
 
-func join(p_url: String, p_name: String, p_room: String) -> void:
+func join(p_url: String, p_name: String, p_room: String, extra: Dictionary = {}) -> void:
+	hello_extra = extra.duplicate()
 	url = p_url.strip_edges()
 	player_name = p_name
 	room = p_room
@@ -92,7 +95,9 @@ func _process(_delta: float) -> void:
 			state = State.WAITING_WELCOME
 			_phase_started = now
 			_last_rx = now
-			_ws.send_text(Protocol.encode({"t": "hello", "v": Protocol.VERSION, "name": player_name, "room": room}))
+			var hello := {"t": "hello", "v": Protocol.VERSION, "name": player_name, "room": room}
+			hello.merge(hello_extra)
+			_ws.send_text(Protocol.encode(hello))
 		while _ws.get_available_packet_count() > 0:
 			var text := _ws.get_packet().get_string_from_utf8()
 			var msg = Protocol.decode(text, Protocol.MAX_SIGNAL_BYTES)

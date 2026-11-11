@@ -16,6 +16,8 @@ var _wind := {}               # code -> {now: Vector2, target: Vector2, next_cha
 var _clock := 0.0
 var _gravity := {}            # code -> {sign: float} (follows BeatClock)
 var balls_enabled := true
+var _pop := {}                # room key "P:CODE" -> PopRoom (Pop-Up Panic)
+var _snap_n := 0
 ## ICE servers handed to voice clients in the welcome. Free public STUN by default.
 ## A TURN relay can be added later with the VOICE_ICE_SERVERS environment variable
 ## (a JSON array like [{"urls":["turn:host:3478"],"username":"u","credential":"p"}])
@@ -73,6 +75,7 @@ func stop() -> void:
 	_balls.clear()
 	_wind.clear()
 	_gravity.clear()
+	_pop.clear()
 	_pending.clear()
 	_tcp.stop()
 
@@ -100,8 +103,12 @@ func _process(delta: float) -> void:
 		_release_held()
 	_clock += delta
 	for room in _rooms.keys():
+		if _pop.has(room):
+			continue
 		_update_wind(room, delta)
 		_update_gravity(room, now)
+	for room in _pop.keys():
+		_pop_tick(room, delta, now)
 	if balls_enabled:
 		for room in _balls.keys():
 			var feet := {}
@@ -223,8 +230,19 @@ func _handle_packet(c: Dictionary, pkt: PackedByteArray, is_text: bool, now: int
 		"state":
 			if c.room == "":
 				_bad(c, "not_in_room")
+			elif _pop.has(c.room):
+				_on_pop_state(c, msg, now)
 			else:
 				_on_state(c, msg, now)
+		"bonk":
+			if c.room == "" or not _pop.has(c.room):
+				_bad(c, "not_in_room")
+			else:
+				var by = Protocol.parse_number(msg.get("y"))
+				if by == null:
+					_bad(c, "bad_state")
+				elif not bool(c.get("pop_out", false)):
+					_pop[c.room].bonk(c.id, wrapf(float(by), -PI, PI), now)
 		"ping":
 			var stamp = Protocol.parse_number(msg.get("c"))
 			_send(c, {"t": "pong", "c": stamp if stamp != null else 0})
@@ -385,6 +403,9 @@ func _on_hello(c: Dictionary, msg: Dictionary, now: int) -> void:
 		_kick(c.id, "bad_version", "Please update the app")
 		return
 	var room := Protocol.sanitize_room(msg.get("room"))
+	if str(msg.get("g", "")) == "pop":
+		_on_pop_hello(c, msg, room, now)
+		return
 	var members: Array = _rooms.get(room, [])
 	if not _rooms.has(room) and _rooms.size() >= Protocol.MAX_ROOMS:
 		_kick(c.id, "server_full", "Server is full, try later")
@@ -514,6 +535,7 @@ func _knock(id: int, velocity: Vector3) -> void:
 
 
 func _broadcast_snapshots(now: int) -> void:
+	_snap_n += 1
 	for room in _rooms.keys():
 		var list := []
 		for id in _rooms[room]:
@@ -521,6 +543,13 @@ func _broadcast_snapshots(now: int) -> void:
 			var p: Vector3 = c.pos
 			list.append([id, snappedf(p.x, 0.01), snappedf(p.y, 0.01), snappedf(p.z, 0.01), snappedf(c.yaw, 0.01)])
 		var snap := {"t": "snap", "ts": now, "pl": list}
+		if _pop.has(room):
+			var pr: PopRoom = _pop[room]
+			list.append_array(pr.bot_snapshot_entries())
+			if _snap_n % Protocol.SNAPSHOT_HZ == 0:
+				snap["sc"] = pr.score_list()
+			_broadcast(room, snap, -1)
+			continue
 		if _balls.has(room):
 			snap["b"] = _balls[room].to_array()
 		if _wind.has(room):
@@ -532,8 +561,113 @@ func _broadcast_snapshots(now: int) -> void:
 		_broadcast(room, snap, -1)
 
 
+# ---------------------------------------------------------------- Pop-Up Panic
+# A second game on the same referee. Its rooms are keyed "P:CODE" so they never mix
+# with the neon world. The phone moves its own character (instant controls); the
+# referee keeps the round clock and scores, checks every bonk, and runs the bots.
+
+func _on_pop_hello(c: Dictionary, msg: Dictionary, code: String, now: int) -> void:
+	var key := "P:" + code
+	var members: Array = _rooms.get(key, [])
+	if not _rooms.has(key) and _rooms.size() >= Protocol.MAX_ROOMS:
+		_kick(c.id, "server_full", "Server is full, try later")
+		return
+	if members.size() >= Protocol.MAX_PLAYERS_PER_ROOM:
+		_kick(c.id, "room_full", "Room %s is full (%d players)" % [code, Protocol.MAX_PLAYERS_PER_ROOM])
+		return
+	var pr: PopRoom = _pop.get(key)
+	if pr == null:
+		pr = PopRoom.new(code, now)
+		pr.broadcast = func(data: Dictionary): _broadcast(key, data, -1)
+		pr.knock_human = func(hid: int, v: Vector3): _pop_knock(hid, v)
+		pr.respawn_human = func(hid: int, pos: Vector3):
+			if _clients.has(hid):
+				_clients[hid].pop_out = false
+				_correct(_clients[hid], pos, "round")
+		pr.new_id = func() -> int:
+			var nid := _next_id
+			_next_id += 1
+			return nid
+		var nb = Protocol.parse_number(msg.get("bots"))
+		pr.want_bots = clampi(int(nb) if nb != null else 3, 0, PopRules.MAX_BOTS)
+		_pop[key] = pr
+	var used := {}
+	for other_id in members:
+		used[_clients[other_id].color] = true
+	var color := 0
+	while used.has(color):
+		color += 1
+	var ch = Protocol.parse_number(msg.get("ch"))
+	c.name = Protocol.sanitize_name(msg.get("name"))
+	c.room = key
+	c.color = color
+	c.ch = clampi(int(ch) if ch != null else color, 0, PopRules.CHARACTERS.size() - 1)
+	c.pos = PopRules.random_spawn(pr.rng)
+	c.last_move = now
+	c.pop_out = false
+	members.append(c.id)
+	_rooms[key] = members
+	pr.add_human(c, now)
+	var others := []
+	for other_id in members:
+		if other_id != c.id:
+			others.append(_describe(_clients[other_id]))
+	for b in pr.bots.values():
+		others.append(pr.describe_bot(b))
+	_send(c, {"t": "welcome", "id": c.id, "room": code, "name": c.name, "c": color, "g": "pop", "ch": c.ch,
+		"spawn": Protocol.vec_to_array(c.pos), "max": Protocol.MAX_PLAYERS_PER_ROOM, "players": others,
+		"ts": now, "r": pr.round_info(now), "sc": pr.score_list(),
+		"voice": {"ice": voice_ice, "talkers": _voice_members(key)}})
+	_broadcast(key, {"t": "join", "p": _describe(c)}, c.id)
+	pr.fill_bots()
+	_log("%s joined Pop-Up Panic room %s (%d people, %d bots)" % [c.name, code, members.size(), pr.bots.size()])
+
+
+func _on_pop_state(c: Dictionary, msg: Dictionary, now: int) -> void:
+	var target = Protocol.parse_vec3(msg.get("p"))
+	var yaw = Protocol.parse_number(msg.get("y"))
+	if target == null or yaw == null:
+		_bad(c, "bad_state")
+		return
+	c.last_move = now
+	if bool(c.get("pop_out", false)):
+		return   # waiting to drop back in
+	c.yaw = wrapf(float(yaw), -PI, PI)
+	var pr: PopRoom = _pop[c.room]
+	if target.y < PopRules.FALL_Y:
+		c.pop_out = true
+		c.pop_back_at = now + 1700
+		c.pos = Vector3(target.x, PopRules.FALL_Y, target.z)
+		pr.knocked_out(c.id, now)
+		return
+	# Light sanity limits only: this is a party game among friends.
+	c.pos = Vector3(clampf(target.x, -40.0, 40.0), clampf(target.y, PopRules.FALL_Y, 30.0), clampf(target.z, -40.0, 40.0))
+	if absf(c.pos.y) < 0.05 and PopRules.on_table(c.pos):
+		pr.landed(c.id)
+
+
+func _pop_tick(key: String, delta: float, now: int) -> void:
+	var pr: PopRoom = _pop[key]
+	pr.tick(delta, now)
+	for id in _rooms.get(key, []):
+		var c: Dictionary = _clients[id]
+		if bool(c.get("pop_out", false)) and now >= int(c.get("pop_back_at", 0)):
+			c.pop_out = false
+			var m := pr._meta_for(id)
+			m.shield_until = now + int(PopRules.SHIELD_S * 1000.0)
+			_correct(c, PopRules.random_spawn(pr.rng), "respawn")
+
+
+func _pop_knock(id: int, v: Vector3) -> void:
+	if _clients.has(id):
+		_send(_clients[id], {"t": "bump", "v": Protocol.vec_to_array(v)})
+
+
 func _describe(c: Dictionary) -> Dictionary:
-	return {"id": c.id, "name": c.name, "c": c.color, "p": Protocol.vec_to_array(c.pos), "y": snappedf(c.yaw, 0.01)}
+	var d := {"id": c.id, "name": c.name, "c": c.color, "p": Protocol.vec_to_array(c.pos), "y": snappedf(c.yaw, 0.01)}
+	if c.has("ch"):
+		d["ch"] = c.ch
+	return d
 
 
 func _bad(c: Dictionary, code: String) -> void:
@@ -564,8 +698,11 @@ func _remove(id: int, reason: String) -> void:
 	if c.room != "" and _rooms.has(c.room):
 		var members: Array = _rooms[c.room]
 		members.erase(id)
+		if _pop.has(c.room):
+			_pop[c.room].remove_human(id)
 		if members.is_empty():
 			_rooms.erase(c.room)
+			_pop.erase(c.room)
 			_balls.erase(c.room)
 			_wind.erase(c.room)
 			_gravity.erase(c.room)
