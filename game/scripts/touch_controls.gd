@@ -11,6 +11,11 @@ var action_label := ""
 var jump_label := "JUMP"
 var show_jump := true          # 0.8.0: games without jumping hide the button
 var action_down := false       # 0.8.0: the action button is held (auto-fire)
+var pedals := false            # 0.8.0 vehicle games: GAS and BRAKE buttons on the right
+var gas_down := false
+var brake_down := false
+var _gas_finger := -1
+var _brake_finger := -1
 var _action_finger := -1
 var action_ready := 1.0     # 0..1, drawn as a ring while the action recharges
 var action_flash := 0.0
@@ -25,6 +30,9 @@ const KNOB_RADIUS_DP := 24.0
 const JUMP_RADIUS_DP := 40.0
 const ACTION_RADIUS_DP := 46.0
 const SMALL_JUMP_RADIUS_DP := 34.0
+const GAS_RADIUS_DP := 46.0
+const BRAKE_RADIUS_DP := 36.0
+const PEDAL_ACTION_RADIUS_DP := 34.0
 const EDGE_GAP_DP := 20.0
 const TOP_BAR_DP := 64.0        # the HUD row: no look-drags start up there
 ## Set by the HUD: rectangles (viewport pixels) where touches belong to buttons.
@@ -62,12 +70,40 @@ func jump_radius() -> float:
 
 
 func action_radius() -> float:
-	return ACTION_RADIUS_DP * _k()
+	return (PEDAL_ACTION_RADIUS_DP if pedals else ACTION_RADIUS_DP) * _k()
+
+
+func _gas_center() -> Vector2:
+	var ins := ScreenUtil.insets(get_viewport())
+	var r := GAS_RADIUS_DP * _k()
+	var gap := EDGE_GAP_DP * _k()
+	return Vector2(_vs().x - ins.r - gap - r - 4.0 * _k(), _vs().y - ins.b - gap - r)
+
+
+func _brake_center() -> Vector2:
+	var g := _gas_center()
+	return Vector2(g.x - (GAS_RADIUS_DP + BRAKE_RADIUS_DP + 18.0) * _k(), g.y + (GAS_RADIUS_DP - BRAKE_RADIUS_DP) * _k())
+
+
+## Gas (+1), brake/reverse (-1) or nothing from the pedals; the stick's up/down
+## works too when no pedal is held.
+func throttle() -> float:
+	if gas_down and not brake_down:
+		return 1.0
+	if brake_down:
+		return -1.0
+	var k := keyboard_move()
+	if k.y != 0.0:
+		return k.y
+	return move.y if absf(move.y) > 0.45 else 0.0
 
 
 ## With two buttons: the big action button sits where the jump button was, and the
 ## jump button rests up and to the left of it, like on a game pad.
 func _action_center() -> Vector2:
+	if pedals:
+		var gc := _gas_center()
+		return gc + Vector2(-8.0 * _k(), -(GAS_RADIUS_DP + PEDAL_ACTION_RADIUS_DP + 20.0) * _k())
 	var ins := ScreenUtil.insets(get_viewport())
 	var r := action_radius()
 	var gap := EDGE_GAP_DP * _k()
@@ -135,6 +171,12 @@ func release_all() -> void:
 	_look_finger = -1
 	_mouse_looking = false
 	move = Vector2.ZERO
+	_gas_finger = -1
+	_brake_finger = -1
+	gas_down = false
+	brake_down = false
+	_action_finger = -1
+	action_down = false
 	queue_redraw()
 
 
@@ -160,11 +202,17 @@ func _on_touch(e: InputEventScreenTouch) -> void:
 	if e.pressed:
 		if _blocked(e.position):
 			return
-		if action_label != "" and e.position.distance_to(_action_center()) <= action_radius() * 1.2:
+		if pedals and e.position.distance_to(_gas_center()) <= GAS_RADIUS_DP * _k() * 1.2:
+			_gas_finger = e.index
+			gas_down = true
+		elif pedals and e.position.distance_to(_brake_center()) <= BRAKE_RADIUS_DP * _k() * 1.25:
+			_brake_finger = e.index
+			brake_down = true
+		elif action_label != "" and e.position.distance_to(_action_center()) <= action_radius() * 1.2:
 			_action_finger = e.index
 			action_down = true
 			_fire_action()
-		elif show_jump and e.position.distance_to(_jump_center()) <= jump_radius() * 1.3:
+		elif show_jump and not pedals and e.position.distance_to(_jump_center()) <= jump_radius() * 1.3:
 			jump.emit()
 		elif e.position.x < _vs().x * 0.5 and e.position.y > maxf(_vs().y * 0.4, _top_limit()) and _stick_finger == -1:
 			_stick_finger = e.index
@@ -178,6 +226,12 @@ func _on_touch(e: InputEventScreenTouch) -> void:
 		if e.index == _action_finger:
 			_action_finger = -1
 			action_down = false
+		if e.index == _gas_finger:
+			_gas_finger = -1
+			gas_down = false
+		if e.index == _brake_finger:
+			_brake_finger = -1
+			brake_down = false
 		if e.index == _stick_finger:
 			_stick_finger = -1
 			move = Vector2.ZERO
@@ -210,7 +264,14 @@ func _process(delta: float) -> void:
 
 ## The two button circles in viewport pixels (for the layout self-check).
 func button_rects() -> Array:
-	var out := [Rect2(_jump_center() - Vector2.ONE * jump_radius(), Vector2.ONE * jump_radius() * 2.0)]
+	var out := []
+	if show_jump and not pedals:
+		out.append(Rect2(_jump_center() - Vector2.ONE * jump_radius(), Vector2.ONE * jump_radius() * 2.0))
+	if pedals:
+		var gr := GAS_RADIUS_DP * _k()
+		var brr := BRAKE_RADIUS_DP * _k()
+		out.append(Rect2(_gas_center() - Vector2.ONE * gr, Vector2.ONE * gr * 2.0))
+		out.append(Rect2(_brake_center() - Vector2.ONE * brr, Vector2.ONE * brr * 2.0))
 	if action_label != "":
 		out.append(Rect2(_action_center() - Vector2.ONE * action_radius(), Vector2.ONE * action_radius() * 2.0))
 	return out
@@ -237,7 +298,10 @@ func _draw() -> void:
 	draw_circle(knob, KNOB_RADIUS_DP * k, Color(1, 1, 1, 0.55))
 	var jc := _jump_center()
 	var font := UiKit.font("anton", 400)
-	if show_jump:
+	if pedals:
+		_draw_pedal(_gas_center(), GAS_RADIUS_DP * k, "GAS", gas_down, Color(0.3, 0.85, 0.45), font, k)
+		_draw_pedal(_brake_center(), BRAKE_RADIUS_DP * k, "BRAKE", brake_down, Color(1.0, 0.4, 0.35), font, k)
+	if show_jump and not pedals:
 		draw_circle(jc, jr, Color(1, 1, 1, 0.22))
 		draw_arc(jc, jr, 0, TAU, 48, Color(1, 1, 1, 0.6), 2.0 * k, true)
 		var fs := int((13 if action_label != "" else 15) * k)
@@ -255,3 +319,12 @@ func _draw() -> void:
 		var afs := int(19 * k)
 		var asz := font.get_string_size(action_label, HORIZONTAL_ALIGNMENT_CENTER, -1, afs)
 		draw_string(font, ac + Vector2(-asz.x / 2.0, afs * 0.35), action_label, HORIZONTAL_ALIGNMENT_CENTER, -1, afs, Color.WHITE)
+
+
+func _draw_pedal(c: Vector2, r: float, text: String, down: bool, tint: Color, font: Font, k: float) -> void:
+	var rr := r * (0.94 if down else 1.0)
+	draw_circle(c, rr, Color(tint.r, tint.g, tint.b, 0.62 if down else 0.3))
+	draw_arc(c, rr, 0, TAU, 48, Color(1, 1, 1, 0.85 if down else 0.6), 2.5 * k, true)
+	var fs := int((15 if r > 40.0 * k else 12) * k)
+	var ts := font.get_string_size(text, HORIZONTAL_ALIGNMENT_CENTER, -1, fs)
+	draw_string(font, c + Vector2(-ts.x / 2.0, fs * 0.35), text, HORIZONTAL_ALIGNMENT_CENTER, -1, fs, Color.WHITE)
