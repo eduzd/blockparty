@@ -1,0 +1,616 @@
+{
+ "v": 1,
+ "title": "Ghost Maze",
+ "intro": "Find the green exit. Don't let the ghost catch you!",
+ "plan": {
+  "genre": "maze chase",
+  "controls": "topdown",
+  "win": "reach the exit",
+  "theme": "spooky maze"
+ },
+ "world": {
+  "size": 40.0,
+  "floor": "ground",
+  "floor_color": "#2B2340",
+  "floor_mat": "stone",
+  "sky": "spooky",
+  "light": "dim",
+  "music": "spooky",
+  "walls": true
+ },
+ "controls": "topdown",
+ "player": {
+  "spawn": [
+   -17.5,
+   0,
+   -17.5
+  ],
+  "speed": 6,
+  "jump": 0,
+  "lives": 3
+ },
+ "entities": [
+  {
+   "id": "w0",
+   "shape": "box",
+   "pos": [
+    -15.0,
+    0,
+    -2.5
+   ],
+   "size": [
+    0.8,
+    3,
+    5.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w1",
+   "shape": "box",
+   "pos": [
+    -15.0,
+    0,
+    17.5
+   ],
+   "size": [
+    0.8,
+    3,
+    5.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w2",
+   "shape": "box",
+   "pos": [
+    -10.0,
+    0,
+    -12.5
+   ],
+   "size": [
+    0.8,
+    3,
+    5.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w3",
+   "shape": "box",
+   "pos": [
+    -5.0,
+    0,
+    -12.5
+   ],
+   "size": [
+    0.8,
+    3,
+    15.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w4",
+   "shape": "box",
+   "pos": [
+    -5.0,
+    0,
+    17.5
+   ],
+   "size": [
+    0.8,
+    3,
+    5.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w5",
+   "shape": "box",
+   "pos": [
+    0.0,
+    0,
+    -5.0
+   ],
+   "size": [
+    0.8,
+    3,
+    10.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w6",
+   "shape": "box",
+   "pos": [
+    0.0,
+    0,
+    7.5
+   ],
+   "size": [
+    0.8,
+    3,
+    5.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w7",
+   "shape": "box",
+   "pos": [
+    5.0,
+    0,
+    -2.5
+   ],
+   "size": [
+    0.8,
+    3,
+    5.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w8",
+   "shape": "box",
+   "pos": [
+    5.0,
+    0,
+    15.0
+   ],
+   "size": [
+    0.8,
+    3,
+    10.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w9",
+   "shape": "box",
+   "pos": [
+    10.0,
+    0,
+    7.5
+   ],
+   "size": [
+    0.8,
+    3,
+    15.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w10",
+   "shape": "box",
+   "pos": [
+    15.0,
+    0,
+    -2.5
+   ],
+   "size": [
+    0.8,
+    3,
+    5.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w11",
+   "shape": "box",
+   "pos": [
+    -12.5,
+    0,
+    -15.0
+   ],
+   "size": [
+    5.8,
+    3,
+    0.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w12",
+   "shape": "box",
+   "pos": [
+    7.5,
+    0,
+    -15.0
+   ],
+   "size": [
+    15.8,
+    3,
+    0.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w13",
+   "shape": "box",
+   "pos": [
+    10.0,
+    0,
+    -10.0
+   ],
+   "size": [
+    10.8,
+    3,
+    0.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w14",
+   "shape": "box",
+   "pos": [
+    -7.5,
+    0,
+    -5.0
+   ],
+   "size": [
+    15.8,
+    3,
+    0.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w15",
+   "shape": "box",
+   "pos": [
+    7.5,
+    0,
+    -5.0
+   ],
+   "size": [
+    5.8,
+    3,
+    0.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w16",
+   "shape": "box",
+   "pos": [
+    -12.5,
+    0,
+    0.0
+   ],
+   "size": [
+    5.8,
+    3,
+    0.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w17",
+   "shape": "box",
+   "pos": [
+    2.5,
+    0,
+    0.0
+   ],
+   "size": [
+    5.8,
+    3,
+    0.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w18",
+   "shape": "box",
+   "pos": [
+    12.5,
+    0,
+    0.0
+   ],
+   "size": [
+    5.8,
+    3,
+    0.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w19",
+   "shape": "box",
+   "pos": [
+    -2.5,
+    0,
+    5.0
+   ],
+   "size": [
+    25.8,
+    3,
+    0.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w20",
+   "shape": "box",
+   "pos": [
+    17.5,
+    0,
+    5.0
+   ],
+   "size": [
+    5.8,
+    3,
+    0.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w21",
+   "shape": "box",
+   "pos": [
+    -7.5,
+    0,
+    10.0
+   ],
+   "size": [
+    15.8,
+    3,
+    0.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w22",
+   "shape": "box",
+   "pos": [
+    12.5,
+    0,
+    10.0
+   ],
+   "size": [
+    5.8,
+    3,
+    0.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "w23",
+   "shape": "box",
+   "pos": [
+    17.5,
+    0,
+    15.0
+   ],
+   "size": [
+    5.8,
+    3,
+    0.8
+   ],
+   "color": "#4A3B6B",
+   "mat": "stone",
+   "tags": [
+    "wall"
+   ]
+  },
+  {
+   "id": "exit",
+   "shape": "ring",
+   "pos": [
+    17.5,
+    0,
+    17.5
+   ],
+   "size": [
+    3,
+    3,
+    0.4
+   ],
+   "color": "#69F0AE",
+   "mat": "glow",
+   "solid": false
+  },
+  {
+   "id": "ghost",
+   "shape": "ghost",
+   "pos": [
+    -17.5,
+    0,
+    17.5
+   ],
+   "color": "#ECEFF1",
+   "mat": "glow",
+   "behaviors": [
+    {
+     "type": "chase",
+     "target": "player",
+     "speed": 3.6
+    },
+    {
+     "type": "damage",
+     "kill": true
+    }
+   ]
+  },
+  {
+   "id": "lamp0",
+   "shape": "lamp",
+   "pos": [
+    -19.2,
+    0,
+    -19.2
+   ],
+   "size": [
+    0.6,
+    3.5,
+    0.6
+   ],
+   "color": "#FFD54F"
+  },
+  {
+   "id": "lamp1",
+   "shape": "lamp",
+   "pos": [
+    -9.6,
+    0,
+    -19.2
+   ],
+   "size": [
+    0.6,
+    3.5,
+    0.6
+   ],
+   "color": "#FFD54F"
+  },
+  {
+   "id": "lamp2",
+   "shape": "lamp",
+   "pos": [
+    0.0,
+    0,
+    -19.2
+   ],
+   "size": [
+    0.6,
+    3.5,
+    0.6
+   ],
+   "color": "#FFD54F"
+  },
+  {
+   "id": "lamp3",
+   "shape": "lamp",
+   "pos": [
+    9.599999999999998,
+    0,
+    -19.2
+   ],
+   "size": [
+    0.6,
+    3.5,
+    0.6
+   ],
+   "color": "#FFD54F"
+  },
+  {
+   "id": "lamp4",
+   "shape": "lamp",
+   "pos": [
+    19.2,
+    0,
+    -19.2
+   ],
+   "size": [
+    0.6,
+    3.5,
+    0.6
+   ],
+   "color": "#FFD54F"
+  }
+ ],
+ "rules": {
+  "win": {
+   "type": "reach",
+   "target": "exit"
+  },
+  "lose": [
+   "no_lives"
+  ]
+ },
+ "hud": [
+  "lives"
+ ]
+}

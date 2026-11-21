@@ -345,7 +345,7 @@ func _update_flow() -> void:
 		return
 	_flow_from = from
 	_flow.clear()
-	var lim := int(_half / GRID) + 2
+	var lim := int(floor(_half / GRID))      # cells -lim .. lim-1 lie inside the world
 	var q: Array[Vector2i] = [from]
 	_flow[from] = 0
 	var i := 0
@@ -356,7 +356,7 @@ func _update_flow() -> void:
 		var dist: int = _flow[c]
 		for d in dirs:
 			var n: Vector2i = c + d
-			if absi(n.x) > lim or absi(n.y) > lim or _flow.has(n) or _blocked.has(n):
+			if n.x < -lim or n.x >= lim or n.y < -lim or n.y >= lim or _flow.has(n) or _blocked.has(n):
 				continue
 			_flow[n] = dist + 1
 			q.append(n)
@@ -567,6 +567,13 @@ func player_died(why: String) -> void:
 	else:
 		say(why)
 	player.call_deferred("teleport", player.respawn_at)
+	# Chasers go back to where they started, so a respawn is not an instant catch.
+	for r in ents:
+		if r.alive and r.actor and (r.beh.has("chase") or r.beh.has("follow")):
+			var cb: CharacterBody3D = r.node
+			cb.velocity = Vector3.ZERO
+			cb.position = r.pos
+	_invuln = 2.0
 
 
 func _hurt(amount: int, why: String, kill: bool) -> void:

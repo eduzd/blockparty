@@ -1,0 +1,386 @@
+{
+ "v": 1,
+ "title": "Candy City Coin Rush",
+ "intro": "Grab 20 coins before time runs out!",
+ "plan": {
+  "genre": "collect against the clock",
+  "loop": "run around the city picking up coins",
+  "controls": "platformer",
+  "win": "20 coins",
+  "theme": "candy city"
+ },
+ "world": {
+  "size": 60,
+  "floor": "ground",
+  "floor_color": "#F8BBD0",
+  "floor_mat": "candy",
+  "sky": "candy",
+  "light": "bright",
+  "music": "happy",
+  "walls": true
+ },
+ "controls": "platformer",
+ "player": {
+  "spawn": [
+   0,
+   0,
+   16
+  ],
+  "speed": 8,
+  "jump": 9
+ },
+ "entities": [
+  {
+   "id": "house0",
+   "shape": "house",
+   "pos": [
+    -18,
+    0,
+    -18
+   ],
+   "size": [
+    7,
+    6,
+    7
+   ],
+   "color": "#80D8FF",
+   "mat": "candy"
+  },
+  {
+   "id": "house1",
+   "shape": "house",
+   "pos": [
+    18,
+    0,
+    -18
+   ],
+   "size": [
+    7,
+    6,
+    7
+   ],
+   "color": "#B388FF",
+   "mat": "candy"
+  },
+  {
+   "id": "house2",
+   "shape": "house",
+   "pos": [
+    -18,
+    0,
+    18
+   ],
+   "size": [
+    7,
+    6,
+    7
+   ],
+   "color": "#FFD180",
+   "mat": "candy"
+  },
+  {
+   "id": "house3",
+   "shape": "house",
+   "pos": [
+    18,
+    0,
+    18
+   ],
+   "size": [
+    7,
+    6,
+    7
+   ],
+   "color": "#FF80AB",
+   "mat": "candy"
+  },
+  {
+   "id": "house4",
+   "shape": "house",
+   "pos": [
+    0,
+    0,
+    -22
+   ],
+   "size": [
+    7,
+    6,
+    7
+   ],
+   "color": "#FF80AB",
+   "mat": "candy"
+  },
+  {
+   "id": "house5",
+   "shape": "house",
+   "pos": [
+    -22,
+    0,
+    0
+   ],
+   "size": [
+    7,
+    6,
+    7
+   ],
+   "color": "#FF80AB",
+   "mat": "candy"
+  },
+  {
+   "id": "house6",
+   "shape": "house",
+   "pos": [
+    22,
+    0,
+    0
+   ],
+   "size": [
+    7,
+    6,
+    7
+   ],
+   "color": "#80D8FF",
+   "mat": "candy"
+  },
+  {
+   "id": "pop0",
+   "shape": "mushroom",
+   "pos": [
+    11.0,
+    0,
+    0.0
+   ],
+   "size": [
+    2,
+    3,
+    2
+   ],
+   "color": "#FF4081"
+  },
+  {
+   "id": "pop1",
+   "shape": "mushroom",
+   "pos": [
+    7.8,
+    0,
+    7.8
+   ],
+   "size": [
+    2,
+    3,
+    2
+   ],
+   "color": "#FF4081"
+  },
+  {
+   "id": "pop2",
+   "shape": "mushroom",
+   "pos": [
+    0.0,
+    0,
+    11.0
+   ],
+   "size": [
+    2,
+    3,
+    2
+   ],
+   "color": "#FF4081"
+  },
+  {
+   "id": "pop3",
+   "shape": "mushroom",
+   "pos": [
+    -7.8,
+    0,
+    7.8
+   ],
+   "size": [
+    2,
+    3,
+    2
+   ],
+   "color": "#FF4081"
+  },
+  {
+   "id": "pop4",
+   "shape": "mushroom",
+   "pos": [
+    -11.0,
+    0,
+    0.0
+   ],
+   "size": [
+    2,
+    3,
+    2
+   ],
+   "color": "#FF4081"
+  },
+  {
+   "id": "pop5",
+   "shape": "mushroom",
+   "pos": [
+    -7.8,
+    0,
+    -7.8
+   ],
+   "size": [
+    2,
+    3,
+    2
+   ],
+   "color": "#FF4081"
+  },
+  {
+   "id": "pop6",
+   "shape": "mushroom",
+   "pos": [
+    -0.0,
+    0,
+    -11.0
+   ],
+   "size": [
+    2,
+    3,
+    2
+   ],
+   "color": "#FF4081"
+  },
+  {
+   "id": "pop7",
+   "shape": "mushroom",
+   "pos": [
+    7.8,
+    0,
+    -7.8
+   ],
+   "size": [
+    2,
+    3,
+    2
+   ],
+   "color": "#FF4081"
+  },
+  {
+   "id": "coin",
+   "shape": "coin",
+   "pos": [
+    -14,
+    0.6,
+    -8
+   ],
+   "color": "#FFC107",
+   "tags": [
+    "coin"
+   ],
+   "repeat": {
+    "count": 8,
+    "step": [
+     4,
+     0,
+     0
+    ]
+   },
+   "behaviors": [
+    {
+     "type": "collect",
+     "score": 1
+    }
+   ]
+  },
+  {
+   "id": "ringcoin",
+   "shape": "coin",
+   "pos": [
+    0,
+    0.6,
+    0
+   ],
+   "color": "#FFC107",
+   "tags": [
+    "coin"
+   ],
+   "circle": {
+    "count": 10,
+    "radius": 6
+   },
+   "behaviors": [
+    {
+     "type": "collect",
+     "score": 1
+    }
+   ]
+  },
+  {
+   "id": "southcoin",
+   "shape": "coin",
+   "pos": [
+    -10,
+    0.6,
+    9
+   ],
+   "color": "#FFC107",
+   "tags": [
+    "coin"
+   ],
+   "repeat": {
+    "count": 6,
+    "step": [
+     4,
+     0,
+     0
+    ]
+   },
+   "behaviors": [
+    {
+     "type": "collect",
+     "score": 1
+    }
+   ]
+  },
+  {
+   "id": "gumdrop",
+   "shape": "gem",
+   "pos": [
+    8,
+    0.6,
+    -14
+   ],
+   "color": "#00E5FF",
+   "behaviors": [
+    {
+     "type": "collect",
+     "score": 0,
+     "time": 5
+    }
+   ]
+  }
+ ],
+ "triggers": [
+  {
+   "on": "score",
+   "value": 10,
+   "do": [
+    {
+     "act": "message",
+     "text": "Halfway there!"
+    }
+   ]
+  }
+ ],
+ "rules": {
+  "win": {
+   "type": "score",
+   "value": 20
+  },
+  "lose": [
+   "time_up"
+  ],
+  "timer": 60
+ },
+ "hud": [
+  "score",
+  "timer"
+ ]
+}
