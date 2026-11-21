@@ -69,6 +69,12 @@ async function hello(c, extra) { send(c, Object.assign({ t: 's_hello', v: 1 }, e
     const keys = (ags && ags.schema || []).map(o => o.key);
     ok(['tone', 'strict', 'age', 'size', 'difficulty', 'theme', 'max_parts', 'allow_lava', 'allow_spinner', 'allow_ice'].every(k => keys.includes(k)), 'rule options for tone, strictness, age, size, difficulty, theme, most objects, lava, hammers, ice');
 
+    // 1.0.2: no Studio build limits by default; they are optional admin switches.
+    const cf = await ask(ad, { t: 'a_cfg' }, 'a_cfg_res');
+    const cv = cf && cf.cfg || {};
+    ok(cv.ai_limit_on === false && cv.ai_one_at_a_time === false && cv.ai_global_on === false,
+      `build limits are off: daily ${cv.ai_limit_on}, one at a time ${cv.ai_one_at_a_time}, server-wide ${cv.ai_global_on}`);
+
     // Studio tells the app whether AI is set up.
     const mine0 = await ask(p, { t: 's_studio_mine' }, 's_studio_mine_res');
     ok(mine0 && typeof mine0.ai === 'boolean', `Studio gets the "AI set up" flag (${mine0 && mine0.ai})`);
@@ -107,6 +113,26 @@ async function hello(c, extra) { send(c, Object.assign({ t: 's_hello', v: 1 }, e
       const ed = await ask(p, { t: 's_ai_build', prompt: 'make it harder', base: b.level }, 's_ai_res', 40000);
       ok(ed && ed.ok && !ed.quick, 'changing the game in words also goes through the AI');
 
+      // 1.0.2: unlimited builds by default, several at once.
+      let allOk = true, lefts = [];
+      for (let i = 0; i < 6; i++) {
+        const x = await ask(p, { t: 's_ai_build', prompt: 'jump course ' + i }, 's_ai_res', 40000);
+        allOk = allOk && !!(x && x.ok); lefts.push(x && x.left);
+      }
+      ok(allOk && lefts.every(v => v === -1), `8 builds in a row all work, no daily limit (left: ${lefts.join(',')})`);
+      const two = await Promise.all([ask(p, { t: 's_ai_build', prompt: 'lava run A' }, 's_ai_res', 40000), ask(p, { t: 's_ai_build', prompt: 'lava run B' }, 's_ai_res', 40000)]);
+      ok(two.every(x => x && x.ok), 'two builds at the same time both work');
+      // Optional switches still work when an admin turns them on.
+      r = await ask(ad, { t: 'a_cfg_set', values: { ai_limit_on: true, ai_per_day: 1 } }, 'a_ok');
+      const lim = await ask(p, { t: 's_ai_build', prompt: 'one more' }, 's_ai_res', 40000);
+      ok(lim && lim.ok === false && /used all 1/.test(lim.why || ''), 'daily limit switched on: refused (' + (lim && lim.why) + ')');
+      r = await ask(ad, { t: 'a_cfg_set', values: { ai_limit_on: false, ai_one_at_a_time: true } }, 'a_ok');
+      const two2 = await Promise.all([ask(p, { t: 's_ai_build', prompt: 'race A' }, 's_ai_res', 40000), ask(p, { t: 's_ai_build', prompt: 'race B' }, 's_ai_res', 40000)]);
+      ok(two2.filter(x => x && x.ok).length === 1 && two2.some(x => x && /still being built/.test(x.why || '')), 'one-at-a-time switched on: the second build waits');
+      r = await ask(ad, { t: 'a_cfg_set', values: { ai_limit_on: false, ai_one_at_a_time: false, ai_per_day: 5 } }, 'a_ok');
+      const cf2 = await ask(ad, { t: 'a_cfg' }, 'a_cfg_res');
+      ok(cf2 && cf2.cfg.ai_limit_on === false && cf2.cfg.ai_one_at_a_time === false, 'switches back off');
+
       // Agent switched off: 0.7.2 AI only, so a clear "not set up" error and no game.
       r = await ask(ad, { t: 'a_agent_save', agent: Object.assign({}, rules, { on: false }) }, 'a_ok');
       const mine2 = await ask(p, { t: 's_studio_mine' }, 's_studio_mine_res');
@@ -134,6 +160,7 @@ async function hello(c, extra) { send(c, Object.assign({ t: 's_hello', v: 1 }, e
     try {
       if (MOCK && ad && origAi) await ask(ad, { t: 'a_ai_set', base: origAi.base, model: origAi.model, clear_key: true }, 'a_ok');
       if (ad && origAgent && MOCK) await ask(ad, { t: 'a_agent_save', agent: origAgent }, 'a_ok');
+      if (ad && MOCK) await ask(ad, { t: 'a_cfg_set', values: { ai_limit_on: false, ai_one_at_a_time: false } }, 'a_ok');
     } catch (e) {}
   }
   console.log(`studio_ai: ${passes} passed, ${failures} failed`);

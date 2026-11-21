@@ -42,6 +42,16 @@ func load_pro(rows: Array) -> void:
 		pro[str(r.uid)] = {"tier": str(r.tier), "until": int(r.until_ts), "source": str(r.source), "auto": bool(r.auto_renew), "allow": int(r.last_allow)}
 
 
+## Tiers as players see them: with no daily Studio limit (the default) extra builds mean nothing,
+## so the perk is hidden.
+func _shown_tiers() -> Array:
+	var out := tiers()
+	if not plox.cfg.b("ai_limit_on"):
+		for t in out:
+			t["ai_extra"] = 0
+	return out
+
+
 func tiers() -> Array:
 	return LiveConfig.clean_tiers(plox.cfg.s("pro_tiers"))
 
@@ -120,7 +130,7 @@ func pro_status(uid: String) -> Dictionary:
 
 func pro_info(uid: String) -> Dictionary:
 	var why := can_buy(uid, "f_pro")
-	return {"t": "s_pro_res", "tiers": tiers(), "open": why == "", "why": why, "sandbox": plox.cfg.s("pay_mode") == "sandbox",
+	return {"t": "s_pro_res", "tiers": _shown_tiers(), "open": why == "", "why": why, "sandbox": plox.cfg.s("pay_mode") == "sandbox",
 		"me": pro_status(uid), "trade_pro_only": plox.cfg.b("trade_pro_only")}
 
 

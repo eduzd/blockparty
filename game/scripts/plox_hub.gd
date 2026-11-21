@@ -48,7 +48,6 @@ const LOADS := [
 ]
 const ADMIN_LOCK_FAILS := 5
 const ADMIN_LOCK_S := 600
-const AI_GLOBAL_PER_DAY := 300
 const MAX_PROMPT := 1000
 const LEVEL_MSG_BYTES := 16000
 
@@ -397,9 +396,17 @@ func _outfits_res(uid: String) -> Dictionary:
 	return {"t": "s_outfits_res", "ok": false, "why": "", "outfits": outfits.get(uid, []), "cap": outfit_cap(uid)}
 
 
+## Daily Studio builds for a player, or -1 for unlimited (the default since 1.0.2).
 func ai_cap_for(uid: String) -> int:
+	if not cfg.b("ai_limit_on"):
+		return -1
 	var pd := int(agent("studio_builder").get("per_day", 0))
 	return (pd if pd > 0 else cfg.i("ai_per_day")) + int(pay.tier_of(uid).get("ai_extra", 0))
+
+
+func _ai_left(uid: String) -> int:
+	var c := ai_cap_for(uid)
+	return -1 if c < 0 else maxi(0, c - _ai_used_today(uid))
 
 
 ## Pays a player for playing, inside the shared daily cap. Returns the Plux paid.
@@ -985,18 +992,18 @@ func _ai_build(me: String, msg: Dictionary, reply: Callable, now: int) -> void:
 		reply.call({"t": "s_ai_res", "ok": false, "ai_off": true, "retry": false,
 			"why": "The AI builder isn't switched on yet. The Plux team needs to set it up in Plux Admin."})
 		return
-	if _ai_busy.has(me):
+	# 1.0.2: every limit below is off unless the admin switches it on in Plux Admin.
+	if cfg.b("ai_one_at_a_time") and int(_ai_busy.get(me, 0)) > 0:
 		fail.call("Your last game is still being built.")
 		return
-	var used := _ai_used_today(me)
 	var ai_cap := ai_cap_for(me)
-	if used >= ai_cap:
+	if ai_cap >= 0 and _ai_used_today(me) >= ai_cap:
 		fail.call("You've used all %d AI builds for today. More tomorrow!" % ai_cap)
 		return
-	if int(daily.get(today(now), {}).get("ai", 0)) >= AI_GLOBAL_PER_DAY:
+	if cfg.b("ai_global_on") and int(daily.get(today(now), {}).get("ai", 0)) >= cfg.i("ai_global_per_day"):
 		fail.call("The AI builder is very busy today. Try again tomorrow.")
 		return
-	_ai_busy[me] = true
+	_ai_busy[me] = int(_ai_busy.get(me, 0)) + 1
 	count("ai")
 	count("ai:" + me)
 	var started := Time.get_ticks_msec()
@@ -1005,7 +1012,9 @@ func _ai_build(me: String, msg: Dictionary, reply: Callable, now: int) -> void:
 	if msg.get("base") is Dictionary:
 		change = PloxLevel.clean(msg.base, cfg.i("studio_max_parts"))
 	_ai_call(prompt, func(ok: bool, level: Dictionary, why: String):
-		_ai_busy.erase(me)
+		_ai_busy[me] = int(_ai_busy.get(me, 1)) - 1
+		if int(_ai_busy[me]) <= 0:
+			_ai_busy.erase(me)
 		var ms := Time.get_ticks_msec() - started
 		var info := str(level.get("_info", ""))
 		level.erase("_info")
@@ -1014,7 +1023,7 @@ func _ai_build(me: String, msg: Dictionary, reply: Callable, now: int) -> void:
 			level.title = filter_text(str(level.title))
 			reply.call({"t": "s_ai_res", "ok": true, "level": level, "source": "ai", "ms": ms,
 				"why": "Built by the AI in %.0f seconds." % (ms / 1000.0),
-				"left": maxi(0, ai_cap_for(me) - _ai_used_today(me))})
+				"left": _ai_left(me)})
 		else:
 			# 0.7.2: no fallback game. Say what went wrong and let the player try again.
 			# A failed build doesn't use up one of the player's daily builds.
@@ -1022,7 +1031,7 @@ func _ai_build(me: String, msg: Dictionary, reply: Callable, now: int) -> void:
 				count("ai:" + me, -1)
 			reply.call({"t": "s_ai_res", "ok": false, "retry": true, "source": "ai", "ai_error": _player_ai_reason(why),
 				"why": "The AI couldn't build this game: %s. Try again." % _player_ai_reason(why),
-				"left": maxi(0, ai_cap_for(me) - _ai_used_today(me))}), false, {"agent": ag}, change)
+				"left": _ai_left(me)}), false, {"agent": ag}, change)
 
 
 ## A short, player-friendly reason (never the URL or anything private).
@@ -1394,6 +1403,16 @@ func _user_row(uid: String) -> Dictionary:
 		"age": SocialHub.age_from(str(u.get("birthday", ""))), "email": str(u.get("email", ""))}
 
 
+## The AI usage log for the admin app, newest first, with each player's username.
+func _ai_log_rows(n: int) -> Array:
+	var out := []
+	for e in ai_log.slice(0, clampi(n, 1, 300)):
+		var r: Dictionary = e.duplicate()
+		r["username"] = str(hub.users.get(str(e.uid), {}).get("username", ""))
+		out.append(r)
+	return out
+
+
 ## Admin messages. Returns "" or an error code for the referee.
 func admin_handle(cid: int, msg: Dictionary, send: Callable) -> String:
 	var t := str(msg.t)
@@ -1465,7 +1484,8 @@ func admin_handle(cid: int, msg: Dictionary, send: Callable) -> String:
 			var uid := str(msg.get("uid", ""))
 			bans.erase(uid)
 			_db("delete from plox_bans where uid = $1", [uid])
-			_audit("unban", "@%s" % hub.users.get(uid, {}).get("username", uid))
+			var ur := SocialHub.clean_text(msg.get("reason", ""), 200, false)
+			_audit("unban", "@%s%s" % [hub.users.get(uid, {}).get("username", uid), (": " + ur) if ur != "" else ""])
 			reply.call({"t": "a_ok", "ok": true, "user": _user_row(uid)})
 		"a_resetpw":
 			var uid := str(msg.get("uid", ""))
@@ -1488,7 +1508,8 @@ func admin_handle(cid: int, msg: Dictionary, send: Callable) -> String:
 				if hub.sessions[th] == uid:
 					hub.sessions.erase(th)
 			_db("delete from bp_sessions where uid = $1", [uid])
-			_audit("reset password", "@%s" % hub.users[uid].get("username", uid))
+			var pr := SocialHub.clean_text(msg.get("reason", ""), 200, false)
+			_audit("reset password", "@%s%s%s" % [hub.users[uid].get("username", uid), " (temporary password set)" if (tmp is String and tmp != "") else " (password cleared)", (": " + pr) if pr != "" else ""])
 			reply.call({"t": "a_ok", "ok": true, "user": _user_row(uid)})
 		"a_plux":
 			var uid := str(msg.get("uid", ""))
@@ -1585,7 +1606,7 @@ func admin_handle(cid: int, msg: Dictionary, send: Callable) -> String:
 			reply.call({"t": "a_ok", "ok": true, "changed": changed, "cfg": cfg.values})
 		"a_ai_get":
 			reply.call({"t": "a_ai_res", "base": ai_cfg.base, "model": ai_cfg.model, "key": ("••••••••" + ai_cfg.key_tail) if ai_cfg.key_enc != "" else "",
-				"ready": ai_ready(), "log": ai_log.slice(0, 60), "today": int(daily.get(today(now), {}).get("ai", 0))})
+				"ready": ai_ready(), "log": _ai_log_rows(int(msg.get("n", 60))), "today": int(daily.get(today(now), {}).get("ai", 0))})
 		"a_ai_set":
 			var base := str(msg.get("base", ai_cfg.base)).strip_edges().substr(0, 300)
 			var model := str(msg.get("model", ai_cfg.model)).strip_edges().substr(0, 120)
@@ -1734,7 +1755,14 @@ func admin_handle(cid: int, msg: Dictionary, send: Callable) -> String:
 		"a_cfg":
 			reply.call({"t": "a_cfg_res", "cfg": cfg.values, "defaults": LiveConfig.DEFAULTS})
 		"a_audit":
-			reply.call({"t": "a_audit_res", "audit": audit.slice(0, 150)})
+			var aq := str(msg.get("q", "")).to_lower().strip_edges()
+			var arows := []
+			for e in audit:
+				if aq == "" or str(e.detail).to_lower().contains(aq) or str(e.action).to_lower().contains(aq):
+					arows.append(e)
+				if arows.size() >= 150:
+					break
+			reply.call({"t": "a_audit_res", "audit": arows})
 		"a_admin_pw":
 			var old = msg.get("old")
 			var nw = msg.get("new")
