@@ -108,3 +108,95 @@ maze = {"v": 1, "title": "Ghost Maze", "intro": "Find the green exit. Don't let 
         "hud": ["lives"]}
 json.dump(maze, open(os.path.join(OUT, "ghost_maze.json"), "w"), indent=1)
 print("maze walls", len(walls), "entities", len(ents))
+
+
+# ---------------------------------------------------------------- part B samples
+import math
+
+# 4. Three-lap car race around a volcano, against three rival cars.
+R, NG = 34.0, 10
+ents = [
+    {"id": "volcano", "shape": "cone", "pos": [0, 0, 0], "size": [30, 22, 30], "color": "#4E342E", "mat": "stone"},
+    {"id": "crater", "shape": "cylinder", "pos": [0, 20.5, 0], "size": [7, 1.2, 7], "color": "#FF5722", "mat": "lava", "solid": False},
+    {"id": "lava_pool", "shape": "cylinder", "pos": [0, 0.02, 0], "size": [34, 0.1, 34], "color": "#FF5722", "mat": "lava", "solid": False},
+]
+for i in range(20):   # dark asphalt ring for the track (decoration only)
+    a = i * math.tau / 20
+    ents.append({"id": f"road{i}", "shape": "box", "pos": [round(R * math.sin(a), 2), 0.03, round(R * math.cos(a), 2)],
+                 "size": [13, 0.06, 11.6], "rot": [0, round(math.degrees(a) + 90, 1), 0], "color": "#37474F", "mat": "asphalt", "solid": False})
+for i in range(14):   # rocks and glowing lamps outside the track
+    a = i * math.tau / 14 + 0.2
+    ents.append({"id": f"rock{i}", "shape": "rock" if i % 2 else "lamp", "pos": [round(48 * math.sin(a), 1), 0, round(48 * math.cos(a), 1)],
+                 "size": [4, 3, 4] if i % 2 else [1, 5, 1], "color": "#5D4037" if i % 2 else "#FFAB40"})
+gates = []
+for i in range(1, NG + 1):   # gate i sits i/NG of the way round; the last one is the start/finish line
+    a = (i % NG) * math.tau / NG
+    gid = f"gate{i}"
+    gates.append(gid)
+    ents.append({"id": gid, "shape": "box", "pos": [round(R * math.sin(a), 2), 0, round(R * math.cos(a), 2)], "size": [14, 4, 1.5],
+                 "rot": [0, round(math.degrees(a) + 90, 1), 0], "color": "#FFD54F", "solid": False, "hidden": False, "mat": "glass"})
+ents.append({"id": "finish_flag", "shape": "flag", "pos": [0, 0, R + 8], "size": [1, 6, 1], "color": "#FFFFFF"})
+for i, (col, spd) in enumerate([("#E53935", 13.5), ("#43A047", 12.5), ("#FDD835", 11.5)]):
+    ents.append({"id": f"rival{i + 1}", "shape": "car", "pos": [R, 0, 0], "size": [2, 1.3, 3.6], "color": col, "mat": "metal",
+                 "tags": ["rival"], "behaviors": [{"type": "race", "speed": spd}]})
+race = {"v": 1, "title": "Volcano Grand Prix", "intro": "Three laps round the volcano. Beat the rivals to the line!",
+        "plan": {"genre": "racing", "loop": "drive through the gates in order, three laps", "controls": "vehicle", "win": "finish first", "theme": "volcano"},
+        "world": {"size": 110, "floor": "ground", "floor_color": "#3E2723", "floor_mat": "stone", "sky": "sunset", "light": "dim", "music": "race", "walls": True},
+        "controls": "vehicle", "player": {"spawn": [5, 0, R], "speed": 19, "color": "#1E88E5"},
+        "entities": ents,
+        "triggers": [{"on": "lap", "value": 2, "do": [{"act": "message", "text": "Last lap, floor it!"}]}],
+        "rules": {"win": {"type": "laps", "value": 3}, "laps": 3, "checkpoints": gates, "lose": ["beaten"]},
+        "hud": ["laps"]}
+json.dump(race, open(os.path.join(OUT, "volcano_race.json"), "w"), indent=1)
+
+# 5. Zombie waves in a graveyard: shoot them before they reach you.
+ents = []
+for i in range(8):
+    a = i * math.tau / 8 + 0.39
+    x, z = round(19 * math.sin(a), 1), round(19 * math.cos(a), 1)
+    ents.append({"id": f"grave{i}", "shape": "grave", "pos": [x, 0, z], "size": [1.6, 2, 0.5], "rot": [0, round(math.degrees(a), 1), 0], "color": "#90A4AE", "mat": "stone"})
+    ents.append({"id": f"rise{i}", "shape": "box", "pos": [round(16.5 * math.sin(a), 1), 0, round(16.5 * math.cos(a), 1)], "size": [1, 0.1, 1],
+                 "color": "#4E342E", "solid": False, "tags": ["grave_spawn"]})
+for i in range(6):
+    a = i * math.tau / 6
+    ents.append({"id": f"tree{i}", "shape": "tree", "pos": [round(23 * math.sin(a), 1), 0, round(23 * math.cos(a), 1)], "size": [3, 7, 3], "color": "#37474F"})
+for i in range(4):
+    a = i * math.tau / 4 + 0.78
+    ents.append({"id": f"lamp{i}", "shape": "lamp", "pos": [round(9 * math.sin(a), 1), 0, round(9 * math.cos(a), 1)], "size": [0.8, 4.5, 0.8], "color": "#B2FF59"})
+ents.append({"id": "zombie", "template": True, "shape": "character", "pos": [0, 0, -16], "size": [1, 2, 1], "color": "#7CB342",
+             "tags": ["enemy"], "behaviors": [{"type": "chase", "speed": 2.4}, {"type": "damage", "amount": 1, "knock": 5},
+                                               {"type": "destructible", "hp": 2, "score": 10}]})
+ents.append({"id": "heart", "shape": "heart", "pos": [-6, 0.8, 6], "color": "#FF5252", "behaviors": [{"type": "collect", "heal": 2, "score": 0}]})
+ents.append({"id": "heart2", "shape": "heart", "pos": [6, 0.8, -6], "color": "#FF5252", "behaviors": [{"type": "collect", "heal": 2, "score": 0}]})
+zombies = {"v": 1, "title": "Graveyard Shift", "intro": "Zombies rise from the graves. Hold FIRE and survive three waves!",
+           "plan": {"genre": "wave survival shooter", "loop": "shoot the zombies as they rise", "controls": "platformer", "win": "survive 3 waves", "theme": "graveyard at night"},
+           "world": {"size": 52, "floor": "ground", "floor_color": "#33402B", "floor_mat": "grass", "sky": "spooky", "light": "dim", "fog": 0.02, "music": "spooky", "walls": True},
+           "controls": "platformer", "player": {"spawn": [0, 0, 0], "speed": 7, "jump": 9, "lives": 3, "health": 5, "abilities": ["shoot"],
+                                               "shot": {"rate": 0.25, "damage": 1, "speed": 30, "color": "#FFEE58"}},
+           "entities": ents,
+           "triggers": [{"on": "wave", "value": 3, "do": [{"act": "message", "text": "Here comes the horde!"}]}],
+           "rules": {"win": {"type": "waves"}, "lose": ["no_lives"], "wave_gap": 3,
+                     "waves": [{"template": "zombie", "count": 4, "every": 1.4, "at": "grave_spawn"},
+                               {"template": "zombie", "count": 6, "every": 1.1, "at": "grave_spawn"},
+                               {"template": "zombie", "count": 9, "every": 0.8, "at": "grave_spawn"}]},
+           "hud": ["wave", "score", "health", "lives"]}
+json.dump(zombies, open(os.path.join(OUT, "zombie_graveyard.json"), "w"), indent=1)
+
+# 6. Sumo on a shrinking platform: dash the bots off before they shove you.
+ents = [{"id": "ring", "shape": "cylinder", "pos": [0, -1, 0], "size": [22, 1, 22], "color": "#FFB74D", "mat": "wood",
+         "behaviors": [{"type": "shrink", "to": 0.45, "time": 45, "delay": 6}]},
+        {"id": "ring_edge", "shape": "cylinder", "pos": [0, -1.05, 0], "size": [22.6, 0.9, 22.6], "color": "#E53935", "solid": False,
+         "behaviors": [{"type": "shrink", "to": 0.45, "time": 45, "delay": 6}]}]
+for i, col in enumerate(["#8E24AA", "#00897B", "#F4511E"]):
+    a = i * math.tau / 3 + math.pi / 3
+    ents.append({"id": f"bot{i + 1}", "shape": "character", "pos": [round(7 * math.sin(a), 1), 0, round(7 * math.cos(a), 1)], "size": [1.2, 2, 1.2],
+                 "color": col, "tags": ["enemy"], "behaviors": [{"type": "chase", "speed": 2.6}, {"type": "damage", "amount": 0, "knock": 7},
+                                                                 {"type": "destructible", "hp": 99, "score": 100}]})
+sumo = {"v": 1, "title": "Sumo Smash", "intro": "Tap DASH to shove the bots off. The ring is shrinking!",
+        "plan": {"genre": "sumo brawler", "loop": "dash into bots to knock them off", "controls": "platformer", "win": "last one standing", "theme": "sky arena"},
+        "world": {"size": 60, "floor": "none", "sky": "day", "light": "bright", "music": "action", "walls": False},
+        "controls": "platformer", "player": {"spawn": [0, 0, -4], "speed": 7, "jump": 8, "lives": 1, "abilities": ["dash"]},
+        "entities": ents,
+        "rules": {"win": {"type": "defeat_all"}, "lose": ["no_lives", "time_up"], "timer": 120},
+        "hud": ["enemies", "timer"]}
+json.dump(sumo, open(os.path.join(OUT, "sumo_shrink.json"), "w"), indent=1)

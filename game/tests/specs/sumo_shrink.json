@@ -1,0 +1,200 @@
+{
+ "v": 1,
+ "title": "Sumo Smash",
+ "intro": "Tap DASH to shove the bots off. The ring is shrinking!",
+ "plan": {
+  "genre": "sumo brawler",
+  "loop": "dash into bots to knock them off",
+  "controls": "platformer",
+  "win": "last one standing",
+  "theme": "sky arena"
+ },
+ "world": {
+  "size": 60,
+  "floor": "none",
+  "sky": "day",
+  "light": "bright",
+  "music": "action",
+  "walls": false
+ },
+ "controls": "platformer",
+ "player": {
+  "spawn": [
+   0,
+   0,
+   -4
+  ],
+  "speed": 7,
+  "jump": 8,
+  "lives": 1,
+  "abilities": [
+   "dash"
+  ]
+ },
+ "entities": [
+  {
+   "id": "ring",
+   "shape": "cylinder",
+   "pos": [
+    0,
+    -1,
+    0
+   ],
+   "size": [
+    22,
+    1,
+    22
+   ],
+   "color": "#FFB74D",
+   "mat": "wood",
+   "behaviors": [
+    {
+     "type": "shrink",
+     "to": 0.45,
+     "time": 45,
+     "delay": 6
+    }
+   ]
+  },
+  {
+   "id": "ring_edge",
+   "shape": "cylinder",
+   "pos": [
+    0,
+    -1.05,
+    0
+   ],
+   "size": [
+    22.6,
+    0.9,
+    22.6
+   ],
+   "color": "#E53935",
+   "solid": false,
+   "behaviors": [
+    {
+     "type": "shrink",
+     "to": 0.45,
+     "time": 45,
+     "delay": 6
+    }
+   ]
+  },
+  {
+   "id": "bot1",
+   "shape": "character",
+   "pos": [
+    6.1,
+    0,
+    3.5
+   ],
+   "size": [
+    1.2,
+    2,
+    1.2
+   ],
+   "color": "#8E24AA",
+   "tags": [
+    "enemy"
+   ],
+   "behaviors": [
+    {
+     "type": "chase",
+     "speed": 2.6
+    },
+    {
+     "type": "damage",
+     "amount": 0,
+     "knock": 7
+    },
+    {
+     "type": "destructible",
+     "hp": 99,
+     "score": 100
+    }
+   ]
+  },
+  {
+   "id": "bot2",
+   "shape": "character",
+   "pos": [
+    0.0,
+    0,
+    -7.0
+   ],
+   "size": [
+    1.2,
+    2,
+    1.2
+   ],
+   "color": "#00897B",
+   "tags": [
+    "enemy"
+   ],
+   "behaviors": [
+    {
+     "type": "chase",
+     "speed": 2.6
+    },
+    {
+     "type": "damage",
+     "amount": 0,
+     "knock": 7
+    },
+    {
+     "type": "destructible",
+     "hp": 99,
+     "score": 100
+    }
+   ]
+  },
+  {
+   "id": "bot3",
+   "shape": "character",
+   "pos": [
+    -6.1,
+    0,
+    3.5
+   ],
+   "size": [
+    1.2,
+    2,
+    1.2
+   ],
+   "color": "#F4511E",
+   "tags": [
+    "enemy"
+   ],
+   "behaviors": [
+    {
+     "type": "chase",
+     "speed": 2.6
+    },
+    {
+     "type": "damage",
+     "amount": 0,
+     "knock": 7
+    },
+    {
+     "type": "destructible",
+     "hp": 99,
+     "score": 100
+    }
+   ]
+  }
+ ],
+ "rules": {
+  "win": {
+   "type": "defeat_all"
+  },
+  "lose": [
+   "no_lives",
+   "time_up"
+  ],
+  "timer": 120
+ },
+ "hud": [
+  "enemies",
+  "timer"
+ ]
+}

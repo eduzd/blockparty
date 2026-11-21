@@ -1,0 +1,1091 @@
+{
+ "v": 1,
+ "title": "Volcano Grand Prix",
+ "intro": "Three laps round the volcano. Beat the rivals to the line!",
+ "plan": {
+  "genre": "racing",
+  "loop": "drive through the gates in order, three laps",
+  "controls": "vehicle",
+  "win": "finish first",
+  "theme": "volcano"
+ },
+ "world": {
+  "size": 110,
+  "floor": "ground",
+  "floor_color": "#3E2723",
+  "floor_mat": "stone",
+  "sky": "sunset",
+  "light": "dim",
+  "music": "race",
+  "walls": true
+ },
+ "controls": "vehicle",
+ "player": {
+  "spawn": [
+   5,
+   0,
+   34.0
+  ],
+  "speed": 19,
+  "color": "#1E88E5"
+ },
+ "entities": [
+  {
+   "id": "volcano",
+   "shape": "cone",
+   "pos": [
+    0,
+    0,
+    0
+   ],
+   "size": [
+    30,
+    22,
+    30
+   ],
+   "color": "#4E342E",
+   "mat": "stone"
+  },
+  {
+   "id": "crater",
+   "shape": "cylinder",
+   "pos": [
+    0,
+    20.5,
+    0
+   ],
+   "size": [
+    7,
+    1.2,
+    7
+   ],
+   "color": "#FF5722",
+   "mat": "lava",
+   "solid": false
+  },
+  {
+   "id": "lava_pool",
+   "shape": "cylinder",
+   "pos": [
+    0,
+    0.02,
+    0
+   ],
+   "size": [
+    34,
+    0.1,
+    34
+   ],
+   "color": "#FF5722",
+   "mat": "lava",
+   "solid": false
+  },
+  {
+   "id": "road0",
+   "shape": "box",
+   "pos": [
+    0.0,
+    0.03,
+    34.0
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    90.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "road1",
+   "shape": "box",
+   "pos": [
+    10.51,
+    0.03,
+    32.34
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    108.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "road2",
+   "shape": "box",
+   "pos": [
+    19.98,
+    0.03,
+    27.51
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    126.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "road3",
+   "shape": "box",
+   "pos": [
+    27.51,
+    0.03,
+    19.98
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    144.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "road4",
+   "shape": "box",
+   "pos": [
+    32.34,
+    0.03,
+    10.51
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    162.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "road5",
+   "shape": "box",
+   "pos": [
+    34.0,
+    0.03,
+    0.0
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    180.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "road6",
+   "shape": "box",
+   "pos": [
+    32.34,
+    0.03,
+    -10.51
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    198.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "road7",
+   "shape": "box",
+   "pos": [
+    27.51,
+    0.03,
+    -19.98
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    216.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "road8",
+   "shape": "box",
+   "pos": [
+    19.98,
+    0.03,
+    -27.51
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    234.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "road9",
+   "shape": "box",
+   "pos": [
+    10.51,
+    0.03,
+    -32.34
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    252.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "road10",
+   "shape": "box",
+   "pos": [
+    0.0,
+    0.03,
+    -34.0
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    270.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "road11",
+   "shape": "box",
+   "pos": [
+    -10.51,
+    0.03,
+    -32.34
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    288.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "road12",
+   "shape": "box",
+   "pos": [
+    -19.98,
+    0.03,
+    -27.51
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    306.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "road13",
+   "shape": "box",
+   "pos": [
+    -27.51,
+    0.03,
+    -19.98
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    324.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "road14",
+   "shape": "box",
+   "pos": [
+    -32.34,
+    0.03,
+    -10.51
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    342.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "road15",
+   "shape": "box",
+   "pos": [
+    -34.0,
+    0.03,
+    -0.0
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    360.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "road16",
+   "shape": "box",
+   "pos": [
+    -32.34,
+    0.03,
+    10.51
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    378.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "road17",
+   "shape": "box",
+   "pos": [
+    -27.51,
+    0.03,
+    19.98
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    396.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "road18",
+   "shape": "box",
+   "pos": [
+    -19.98,
+    0.03,
+    27.51
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    414.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "road19",
+   "shape": "box",
+   "pos": [
+    -10.51,
+    0.03,
+    32.34
+   ],
+   "size": [
+    13,
+    0.06,
+    11.6
+   ],
+   "rot": [
+    0,
+    432.0,
+    0
+   ],
+   "color": "#37474F",
+   "mat": "asphalt",
+   "solid": false
+  },
+  {
+   "id": "rock0",
+   "shape": "lamp",
+   "pos": [
+    9.5,
+    0,
+    47.0
+   ],
+   "size": [
+    1,
+    5,
+    1
+   ],
+   "color": "#FFAB40"
+  },
+  {
+   "id": "rock1",
+   "shape": "rock",
+   "pos": [
+    29.0,
+    0,
+    38.2
+   ],
+   "size": [
+    4,
+    3,
+    4
+   ],
+   "color": "#5D4037"
+  },
+  {
+   "id": "rock2",
+   "shape": "lamp",
+   "pos": [
+    42.7,
+    0,
+    21.9
+   ],
+   "size": [
+    1,
+    5,
+    1
+   ],
+   "color": "#FFAB40"
+  },
+  {
+   "id": "rock3",
+   "shape": "rock",
+   "pos": [
+    48.0,
+    0,
+    1.2
+   ],
+   "size": [
+    4,
+    3,
+    4
+   ],
+   "color": "#5D4037"
+  },
+  {
+   "id": "rock4",
+   "shape": "lamp",
+   "pos": [
+    43.7,
+    0,
+    -19.8
+   ],
+   "size": [
+    1,
+    5,
+    1
+   ],
+   "color": "#FFAB40"
+  },
+  {
+   "id": "rock5",
+   "shape": "rock",
+   "pos": [
+    30.8,
+    0,
+    -36.8
+   ],
+   "size": [
+    4,
+    3,
+    4
+   ],
+   "color": "#5D4037"
+  },
+  {
+   "id": "rock6",
+   "shape": "lamp",
+   "pos": [
+    11.8,
+    0,
+    -46.5
+   ],
+   "size": [
+    1,
+    5,
+    1
+   ],
+   "color": "#FFAB40"
+  },
+  {
+   "id": "rock7",
+   "shape": "rock",
+   "pos": [
+    -9.5,
+    0,
+    -47.0
+   ],
+   "size": [
+    4,
+    3,
+    4
+   ],
+   "color": "#5D4037"
+  },
+  {
+   "id": "rock8",
+   "shape": "lamp",
+   "pos": [
+    -29.0,
+    0,
+    -38.2
+   ],
+   "size": [
+    1,
+    5,
+    1
+   ],
+   "color": "#FFAB40"
+  },
+  {
+   "id": "rock9",
+   "shape": "rock",
+   "pos": [
+    -42.7,
+    0,
+    -21.9
+   ],
+   "size": [
+    4,
+    3,
+    4
+   ],
+   "color": "#5D4037"
+  },
+  {
+   "id": "rock10",
+   "shape": "lamp",
+   "pos": [
+    -48.0,
+    0,
+    -1.2
+   ],
+   "size": [
+    1,
+    5,
+    1
+   ],
+   "color": "#FFAB40"
+  },
+  {
+   "id": "rock11",
+   "shape": "rock",
+   "pos": [
+    -43.7,
+    0,
+    19.8
+   ],
+   "size": [
+    4,
+    3,
+    4
+   ],
+   "color": "#5D4037"
+  },
+  {
+   "id": "rock12",
+   "shape": "lamp",
+   "pos": [
+    -30.8,
+    0,
+    36.8
+   ],
+   "size": [
+    1,
+    5,
+    1
+   ],
+   "color": "#FFAB40"
+  },
+  {
+   "id": "rock13",
+   "shape": "rock",
+   "pos": [
+    -11.8,
+    0,
+    46.5
+   ],
+   "size": [
+    4,
+    3,
+    4
+   ],
+   "color": "#5D4037"
+  },
+  {
+   "id": "gate1",
+   "shape": "box",
+   "pos": [
+    19.98,
+    0,
+    27.51
+   ],
+   "size": [
+    14,
+    4,
+    1.5
+   ],
+   "rot": [
+    0,
+    126.0,
+    0
+   ],
+   "color": "#FFD54F",
+   "solid": false,
+   "hidden": false,
+   "mat": "glass"
+  },
+  {
+   "id": "gate2",
+   "shape": "box",
+   "pos": [
+    32.34,
+    0,
+    10.51
+   ],
+   "size": [
+    14,
+    4,
+    1.5
+   ],
+   "rot": [
+    0,
+    162.0,
+    0
+   ],
+   "color": "#FFD54F",
+   "solid": false,
+   "hidden": false,
+   "mat": "glass"
+  },
+  {
+   "id": "gate3",
+   "shape": "box",
+   "pos": [
+    32.34,
+    0,
+    -10.51
+   ],
+   "size": [
+    14,
+    4,
+    1.5
+   ],
+   "rot": [
+    0,
+    198.0,
+    0
+   ],
+   "color": "#FFD54F",
+   "solid": false,
+   "hidden": false,
+   "mat": "glass"
+  },
+  {
+   "id": "gate4",
+   "shape": "box",
+   "pos": [
+    19.98,
+    0,
+    -27.51
+   ],
+   "size": [
+    14,
+    4,
+    1.5
+   ],
+   "rot": [
+    0,
+    234.0,
+    0
+   ],
+   "color": "#FFD54F",
+   "solid": false,
+   "hidden": false,
+   "mat": "glass"
+  },
+  {
+   "id": "gate5",
+   "shape": "box",
+   "pos": [
+    0.0,
+    0,
+    -34.0
+   ],
+   "size": [
+    14,
+    4,
+    1.5
+   ],
+   "rot": [
+    0,
+    270.0,
+    0
+   ],
+   "color": "#FFD54F",
+   "solid": false,
+   "hidden": false,
+   "mat": "glass"
+  },
+  {
+   "id": "gate6",
+   "shape": "box",
+   "pos": [
+    -19.98,
+    0,
+    -27.51
+   ],
+   "size": [
+    14,
+    4,
+    1.5
+   ],
+   "rot": [
+    0,
+    306.0,
+    0
+   ],
+   "color": "#FFD54F",
+   "solid": false,
+   "hidden": false,
+   "mat": "glass"
+  },
+  {
+   "id": "gate7",
+   "shape": "box",
+   "pos": [
+    -32.34,
+    0,
+    -10.51
+   ],
+   "size": [
+    14,
+    4,
+    1.5
+   ],
+   "rot": [
+    0,
+    342.0,
+    0
+   ],
+   "color": "#FFD54F",
+   "solid": false,
+   "hidden": false,
+   "mat": "glass"
+  },
+  {
+   "id": "gate8",
+   "shape": "box",
+   "pos": [
+    -32.34,
+    0,
+    10.51
+   ],
+   "size": [
+    14,
+    4,
+    1.5
+   ],
+   "rot": [
+    0,
+    378.0,
+    0
+   ],
+   "color": "#FFD54F",
+   "solid": false,
+   "hidden": false,
+   "mat": "glass"
+  },
+  {
+   "id": "gate9",
+   "shape": "box",
+   "pos": [
+    -19.98,
+    0,
+    27.51
+   ],
+   "size": [
+    14,
+    4,
+    1.5
+   ],
+   "rot": [
+    0,
+    414.0,
+    0
+   ],
+   "color": "#FFD54F",
+   "solid": false,
+   "hidden": false,
+   "mat": "glass"
+  },
+  {
+   "id": "gate10",
+   "shape": "box",
+   "pos": [
+    0.0,
+    0,
+    34.0
+   ],
+   "size": [
+    14,
+    4,
+    1.5
+   ],
+   "rot": [
+    0,
+    90.0,
+    0
+   ],
+   "color": "#FFD54F",
+   "solid": false,
+   "hidden": false,
+   "mat": "glass"
+  },
+  {
+   "id": "finish_flag",
+   "shape": "flag",
+   "pos": [
+    0,
+    0,
+    42.0
+   ],
+   "size": [
+    1,
+    6,
+    1
+   ],
+   "color": "#FFFFFF"
+  },
+  {
+   "id": "rival1",
+   "shape": "car",
+   "pos": [
+    34.0,
+    0,
+    0
+   ],
+   "size": [
+    2,
+    1.3,
+    3.6
+   ],
+   "color": "#E53935",
+   "mat": "metal",
+   "tags": [
+    "rival"
+   ],
+   "behaviors": [
+    {
+     "type": "race",
+     "speed": 13.5
+    }
+   ]
+  },
+  {
+   "id": "rival2",
+   "shape": "car",
+   "pos": [
+    34.0,
+    0,
+    0
+   ],
+   "size": [
+    2,
+    1.3,
+    3.6
+   ],
+   "color": "#43A047",
+   "mat": "metal",
+   "tags": [
+    "rival"
+   ],
+   "behaviors": [
+    {
+     "type": "race",
+     "speed": 12.5
+    }
+   ]
+  },
+  {
+   "id": "rival3",
+   "shape": "car",
+   "pos": [
+    34.0,
+    0,
+    0
+   ],
+   "size": [
+    2,
+    1.3,
+    3.6
+   ],
+   "color": "#FDD835",
+   "mat": "metal",
+   "tags": [
+    "rival"
+   ],
+   "behaviors": [
+    {
+     "type": "race",
+     "speed": 11.5
+    }
+   ]
+  }
+ ],
+ "triggers": [
+  {
+   "on": "lap",
+   "value": 2,
+   "do": [
+    {
+     "act": "message",
+     "text": "Last lap, floor it!"
+    }
+   ]
+  }
+ ],
+ "rules": {
+  "win": {
+   "type": "laps",
+   "value": 3
+  },
+  "laps": 3,
+  "checkpoints": [
+   "gate1",
+   "gate2",
+   "gate3",
+   "gate4",
+   "gate5",
+   "gate6",
+   "gate7",
+   "gate8",
+   "gate9",
+   "gate10"
+  ],
+  "lose": [
+   "beaten"
+  ]
+ },
+ "hud": [
+  "laps"
+ ]
+}

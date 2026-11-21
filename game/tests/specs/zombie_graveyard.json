@@ -1,0 +1,632 @@
+{
+ "v": 1,
+ "title": "Graveyard Shift",
+ "intro": "Zombies rise from the graves. Hold FIRE and survive three waves!",
+ "plan": {
+  "genre": "wave survival shooter",
+  "loop": "shoot the zombies as they rise",
+  "controls": "platformer",
+  "win": "survive 3 waves",
+  "theme": "graveyard at night"
+ },
+ "world": {
+  "size": 52,
+  "floor": "ground",
+  "floor_color": "#33402B",
+  "floor_mat": "grass",
+  "sky": "spooky",
+  "light": "dim",
+  "fog": 0.02,
+  "music": "spooky",
+  "walls": true
+ },
+ "controls": "platformer",
+ "player": {
+  "spawn": [
+   0,
+   0,
+   0
+  ],
+  "speed": 7,
+  "jump": 9,
+  "lives": 3,
+  "health": 5,
+  "abilities": [
+   "shoot"
+  ],
+  "shot": {
+   "rate": 0.25,
+   "damage": 1,
+   "speed": 30,
+   "color": "#FFEE58"
+  }
+ },
+ "entities": [
+  {
+   "id": "grave0",
+   "shape": "grave",
+   "pos": [
+    7.2,
+    0,
+    17.6
+   ],
+   "size": [
+    1.6,
+    2,
+    0.5
+   ],
+   "rot": [
+    0,
+    22.3,
+    0
+   ],
+   "color": "#90A4AE",
+   "mat": "stone"
+  },
+  {
+   "id": "rise0",
+   "shape": "box",
+   "pos": [
+    6.3,
+    0,
+    15.3
+   ],
+   "size": [
+    1,
+    0.1,
+    1
+   ],
+   "color": "#4E342E",
+   "solid": false,
+   "tags": [
+    "grave_spawn"
+   ]
+  },
+  {
+   "id": "grave1",
+   "shape": "grave",
+   "pos": [
+    17.5,
+    0,
+    7.3
+   ],
+   "size": [
+    1.6,
+    2,
+    0.5
+   ],
+   "rot": [
+    0,
+    67.3,
+    0
+   ],
+   "color": "#90A4AE",
+   "mat": "stone"
+  },
+  {
+   "id": "rise1",
+   "shape": "box",
+   "pos": [
+    15.2,
+    0,
+    6.4
+   ],
+   "size": [
+    1,
+    0.1,
+    1
+   ],
+   "color": "#4E342E",
+   "solid": false,
+   "tags": [
+    "grave_spawn"
+   ]
+  },
+  {
+   "id": "grave2",
+   "shape": "grave",
+   "pos": [
+    17.6,
+    0,
+    -7.2
+   ],
+   "size": [
+    1.6,
+    2,
+    0.5
+   ],
+   "rot": [
+    0,
+    112.3,
+    0
+   ],
+   "color": "#90A4AE",
+   "mat": "stone"
+  },
+  {
+   "id": "rise2",
+   "shape": "box",
+   "pos": [
+    15.3,
+    0,
+    -6.3
+   ],
+   "size": [
+    1,
+    0.1,
+    1
+   ],
+   "color": "#4E342E",
+   "solid": false,
+   "tags": [
+    "grave_spawn"
+   ]
+  },
+  {
+   "id": "grave3",
+   "shape": "grave",
+   "pos": [
+    7.3,
+    0,
+    -17.5
+   ],
+   "size": [
+    1.6,
+    2,
+    0.5
+   ],
+   "rot": [
+    0,
+    157.3,
+    0
+   ],
+   "color": "#90A4AE",
+   "mat": "stone"
+  },
+  {
+   "id": "rise3",
+   "shape": "box",
+   "pos": [
+    6.4,
+    0,
+    -15.2
+   ],
+   "size": [
+    1,
+    0.1,
+    1
+   ],
+   "color": "#4E342E",
+   "solid": false,
+   "tags": [
+    "grave_spawn"
+   ]
+  },
+  {
+   "id": "grave4",
+   "shape": "grave",
+   "pos": [
+    -7.2,
+    0,
+    -17.6
+   ],
+   "size": [
+    1.6,
+    2,
+    0.5
+   ],
+   "rot": [
+    0,
+    202.3,
+    0
+   ],
+   "color": "#90A4AE",
+   "mat": "stone"
+  },
+  {
+   "id": "rise4",
+   "shape": "box",
+   "pos": [
+    -6.3,
+    0,
+    -15.3
+   ],
+   "size": [
+    1,
+    0.1,
+    1
+   ],
+   "color": "#4E342E",
+   "solid": false,
+   "tags": [
+    "grave_spawn"
+   ]
+  },
+  {
+   "id": "grave5",
+   "shape": "grave",
+   "pos": [
+    -17.5,
+    0,
+    -7.3
+   ],
+   "size": [
+    1.6,
+    2,
+    0.5
+   ],
+   "rot": [
+    0,
+    247.3,
+    0
+   ],
+   "color": "#90A4AE",
+   "mat": "stone"
+  },
+  {
+   "id": "rise5",
+   "shape": "box",
+   "pos": [
+    -15.2,
+    0,
+    -6.4
+   ],
+   "size": [
+    1,
+    0.1,
+    1
+   ],
+   "color": "#4E342E",
+   "solid": false,
+   "tags": [
+    "grave_spawn"
+   ]
+  },
+  {
+   "id": "grave6",
+   "shape": "grave",
+   "pos": [
+    -17.6,
+    0,
+    7.2
+   ],
+   "size": [
+    1.6,
+    2,
+    0.5
+   ],
+   "rot": [
+    0,
+    292.3,
+    0
+   ],
+   "color": "#90A4AE",
+   "mat": "stone"
+  },
+  {
+   "id": "rise6",
+   "shape": "box",
+   "pos": [
+    -15.3,
+    0,
+    6.3
+   ],
+   "size": [
+    1,
+    0.1,
+    1
+   ],
+   "color": "#4E342E",
+   "solid": false,
+   "tags": [
+    "grave_spawn"
+   ]
+  },
+  {
+   "id": "grave7",
+   "shape": "grave",
+   "pos": [
+    -7.3,
+    0,
+    17.5
+   ],
+   "size": [
+    1.6,
+    2,
+    0.5
+   ],
+   "rot": [
+    0,
+    337.3,
+    0
+   ],
+   "color": "#90A4AE",
+   "mat": "stone"
+  },
+  {
+   "id": "rise7",
+   "shape": "box",
+   "pos": [
+    -6.4,
+    0,
+    15.2
+   ],
+   "size": [
+    1,
+    0.1,
+    1
+   ],
+   "color": "#4E342E",
+   "solid": false,
+   "tags": [
+    "grave_spawn"
+   ]
+  },
+  {
+   "id": "tree0",
+   "shape": "tree",
+   "pos": [
+    0.0,
+    0,
+    23.0
+   ],
+   "size": [
+    3,
+    7,
+    3
+   ],
+   "color": "#37474F"
+  },
+  {
+   "id": "tree1",
+   "shape": "tree",
+   "pos": [
+    19.9,
+    0,
+    11.5
+   ],
+   "size": [
+    3,
+    7,
+    3
+   ],
+   "color": "#37474F"
+  },
+  {
+   "id": "tree2",
+   "shape": "tree",
+   "pos": [
+    19.9,
+    0,
+    -11.5
+   ],
+   "size": [
+    3,
+    7,
+    3
+   ],
+   "color": "#37474F"
+  },
+  {
+   "id": "tree3",
+   "shape": "tree",
+   "pos": [
+    0.0,
+    0,
+    -23.0
+   ],
+   "size": [
+    3,
+    7,
+    3
+   ],
+   "color": "#37474F"
+  },
+  {
+   "id": "tree4",
+   "shape": "tree",
+   "pos": [
+    -19.9,
+    0,
+    -11.5
+   ],
+   "size": [
+    3,
+    7,
+    3
+   ],
+   "color": "#37474F"
+  },
+  {
+   "id": "tree5",
+   "shape": "tree",
+   "pos": [
+    -19.9,
+    0,
+    11.5
+   ],
+   "size": [
+    3,
+    7,
+    3
+   ],
+   "color": "#37474F"
+  },
+  {
+   "id": "lamp0",
+   "shape": "lamp",
+   "pos": [
+    6.3,
+    0,
+    6.4
+   ],
+   "size": [
+    0.8,
+    4.5,
+    0.8
+   ],
+   "color": "#B2FF59"
+  },
+  {
+   "id": "lamp1",
+   "shape": "lamp",
+   "pos": [
+    6.4,
+    0,
+    -6.3
+   ],
+   "size": [
+    0.8,
+    4.5,
+    0.8
+   ],
+   "color": "#B2FF59"
+  },
+  {
+   "id": "lamp2",
+   "shape": "lamp",
+   "pos": [
+    -6.3,
+    0,
+    -6.4
+   ],
+   "size": [
+    0.8,
+    4.5,
+    0.8
+   ],
+   "color": "#B2FF59"
+  },
+  {
+   "id": "lamp3",
+   "shape": "lamp",
+   "pos": [
+    -6.4,
+    0,
+    6.3
+   ],
+   "size": [
+    0.8,
+    4.5,
+    0.8
+   ],
+   "color": "#B2FF59"
+  },
+  {
+   "id": "zombie",
+   "template": true,
+   "shape": "character",
+   "pos": [
+    0,
+    0,
+    -16
+   ],
+   "size": [
+    1,
+    2,
+    1
+   ],
+   "color": "#7CB342",
+   "tags": [
+    "enemy"
+   ],
+   "behaviors": [
+    {
+     "type": "chase",
+     "speed": 2.4
+    },
+    {
+     "type": "damage",
+     "amount": 1,
+     "knock": 5
+    },
+    {
+     "type": "destructible",
+     "hp": 2,
+     "score": 10
+    }
+   ]
+  },
+  {
+   "id": "heart",
+   "shape": "heart",
+   "pos": [
+    -6,
+    0.8,
+    6
+   ],
+   "color": "#FF5252",
+   "behaviors": [
+    {
+     "type": "collect",
+     "heal": 2,
+     "score": 0
+    }
+   ]
+  },
+  {
+   "id": "heart2",
+   "shape": "heart",
+   "pos": [
+    6,
+    0.8,
+    -6
+   ],
+   "color": "#FF5252",
+   "behaviors": [
+    {
+     "type": "collect",
+     "heal": 2,
+     "score": 0
+    }
+   ]
+  }
+ ],
+ "triggers": [
+  {
+   "on": "wave",
+   "value": 3,
+   "do": [
+    {
+     "act": "message",
+     "text": "Here comes the horde!"
+    }
+   ]
+  }
+ ],
+ "rules": {
+  "win": {
+   "type": "waves"
+  },
+  "lose": [
+   "no_lives"
+  ],
+  "wave_gap": 3,
+  "waves": [
+   {
+    "template": "zombie",
+    "count": 4,
+    "every": 1.4,
+    "at": "grave_spawn"
+   },
+   {
+    "template": "zombie",
+    "count": 6,
+    "every": 1.1,
+    "at": "grave_spawn"
+   },
+   {
+    "template": "zombie",
+    "count": 9,
+    "every": 0.8,
+    "at": "grave_spawn"
+   }
+  ]
+ },
+ "hud": [
+  "wave",
+  "score",
+  "health",
+  "lives"
+ ]
+}

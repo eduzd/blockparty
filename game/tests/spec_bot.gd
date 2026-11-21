@@ -11,6 +11,12 @@ const CASES := [
 	["candy_coins.json", "idle", "lose", 70.0],
 	["ghost_maze.json", "play", "win", 90.0],
 	["ghost_maze.json", "idle", "lose", 90.0],
+	["volcano_race.json", "play", "win", 150.0],
+	["volcano_race.json", "idle", "lose", 150.0],
+	["zombie_graveyard.json", "play", "win", 120.0],
+	["zombie_graveyard.json", "idle", "lose", 120.0],
+	["sumo_shrink.json", "play", "win", 125.0],
+	["sumo_shrink.json", "idle", "lose", 125.0],
 ]
 
 var game: SpecPlay
@@ -67,6 +73,11 @@ func _case(file: String, how: String, want: String, limit: float) -> bool:
 			break
 		if how == "play":
 			_drive(1.0 / 60.0)
+		elif game.car:
+			game.bot_car = true
+			game.bot_drive = Vector2.ZERO
+		if OS.get_environment("SPEC_B") != "" and f % 120 == 0:
+			print("  t=%d pos=%s lap=%d cp=%d place=%d wave=%d alive=%d hp=%d lives=%d def=%d" % [f / 60, str(game.player.global_position.snapped(Vector3(0.1,0.1,0.1))), game.lap, game.next_cp, game.race_place, game.wave_i, game._alive_enemies(), game.health, game.lives, game.defeated]); for bb in game.ents: if bb.alive and bb.actor: print("    %s %s kn=%s" % [bb.d.id, str((bb.node as Node3D).global_position.snapped(Vector3(0.1,0.1,0.1))), str(bb.knock)])
 		if OS.get_environment("SPEC_DEBUG") != "" and f % 60 == 0:
 			var gh = game._by_id.get("ghost", {})
 			print("  ghost=%s" % (str((gh.node as Node3D).global_position.snapped(Vector3(0.1,0.1,0.1))) if not gh.is_empty() and gh.alive else "-"))
@@ -91,6 +102,16 @@ func _drive(delta: float) -> void:
 	var p := game.player.global_position
 	var target := Vector3.ZERO
 	var w: Dictionary = game.spec.rules.win
+	if game.car:
+		game.bot_car = true
+		_drive_car(delta)
+		return
+	if game._ability == "shoot":
+		_drive_shooter(delta)
+		return
+	if game._ability == "dash":
+		_drive_sumo(delta)
+		return
 	if str(game.spec.world.floor) == "none":
 		_drive_platforms(delta)
 		return
@@ -316,3 +337,88 @@ func _drive_platforms(_delta: float) -> void:
 		if cb.size.x < 0.1:
 			pass
 	game.bot_dir = dir
+
+
+# ---------------------------------------------------------------- part B autopilots
+
+## Race: steer for a point on the racing line just past the next gate.
+func _drive_car(_delta: float) -> void:
+	var car: SpecCar = game.car
+	var cps: Array = game._cp_ents()
+	var gp: Vector3 = game._cp_pos(game.next_cp)
+	var nx: Vector3 = game._cp_pos(game.next_cp + 1)
+	var aim := gp.lerp(nx, 0.25) if cps.size() > 1 else gp
+	var p := car.global_position
+	var want := atan2(-(aim.x - p.x), -(aim.z - p.z))
+	var diff := wrapf(want - car.heading, -PI, PI)
+	var steer := clampf(-diff * 2.5, -1.0, 1.0)
+	var gas := 1.0 if absf(diff) < 0.9 else 0.3
+	game.bot_drive = Vector2(steer, gas)
+
+
+## Zombies: stand near the middle, turn the camera to the nearest zombie, fire.
+## Back away from one that gets too close.
+func _drive_shooter(_delta: float) -> void:
+	var p := game.player.global_position
+	var near := {}
+	var bd := INF
+	for r in game.ents:
+		if r.alive and not r.hidden and game._is_enemy(r):
+			var d := p.distance_to((r.node as Node3D).global_position)
+			if d < bd:
+				bd = d
+				near = r
+	game.bot_fire = not near.is_empty()
+	game.bot_dir = Vector3.ZERO
+	if near.is_empty():
+		var h: Dictionary = {}
+		if game.health < 4:
+			for r in game.ents:
+				if r.alive and r.collect != null and int(r.collect.heal) > 0:
+					h = r
+		if not h.is_empty():
+			game.bot_dir = ((h.node as Node3D).global_position - p) * Vector3(1, 0, 1)
+			game.bot_dir = game.bot_dir.normalized()
+		return
+	var zp := (near.node as Node3D).global_position
+	var to := zp - p
+	game._cam_yaw = atan2(-to.x, -to.z)
+	game.player.camera_yaw = game._cam_yaw
+
+
+## Sumo: get between a bot and the centre of the ring, then dash it outwards.
+func _drive_sumo(_delta: float) -> void:
+	var p := game.player.global_position
+	var near := {}
+	var bd := INF
+	for r in game.ents:
+		if r.alive and not r.hidden and game._is_enemy(r):
+			var d := p.distance_to((r.node as Node3D).global_position)
+			if d < bd:
+				bd = d
+				near = r
+	if near.is_empty():
+		game.bot_dir = Vector3.ZERO
+		return
+	var bp := (near.node as Node3D).global_position
+	var out := Vector3(bp.x, 0, bp.z)
+	if out.length() < 0.5:
+		out = Vector3(bp.x - p.x, 0, bp.z - p.z)
+	out = out.normalized()
+	var spot := bp - out * 2.2
+	var to_spot := Vector3(spot.x - p.x, 0, spot.z - p.z)
+	var to_bot := Vector3(bp.x - p.x, 0, bp.z - p.z)
+	var ring: Dictionary = game._by_id.get("ring", {})
+	var rad := 11.0 * ((ring.node as Node3D).scale.x if not ring.is_empty() else 1.0)
+	# Lined up (bot is outward of us), close, and we're safely inside: dash.
+	if to_bot.length() < 3.4 and Vector2(p.x, p.z).length() < rad - 3.0 and to_bot.normalized().dot(out) > 0.55 and game._ability_cd <= 0.0:
+		game.bot_dir = to_bot.normalized()
+		game.player.avatar.rotation.y = atan2(-to_bot.x, -to_bot.z)
+		game.bot_action = true
+		return
+	# Stay off the rim: never aim for a spot near the edge.
+	var sp2 := Vector2(spot.x, spot.z)
+	if sp2.length() > rad - 1.5:
+		sp2 = sp2.normalized() * (rad - 1.5)
+		to_spot = Vector3(sp2.x - p.x, 0, sp2.y - p.z)
+	game.bot_dir = to_spot.normalized() if to_spot.length() > 0.3 else to_bot.normalized()
