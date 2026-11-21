@@ -295,8 +295,8 @@ static func _clean_entity(e: Dictionary, half: float, n: int) -> Dictionary:
 	var out := {"id": id, "shape": shape, "pos": _vec(e.get("pos", e.get("position", [0, 0, 0])), -half - 20, half + 20, [0, 0, 0]),
 		"size": sz, "rot": rv, "color": color(e.get("color", e.get("colour", "")), _shape_color(shape)), "mat": _pick(e.get("mat", e.get("material", "plain")), MATS, "plain"),
 		"solid": bool(e.solid) if e.get("solid") is bool else not (shape in ["coin", "gem", "star", "heart", "ring", "ghost"]),
-		"hidden": e.get("hidden", false) is bool and e.hidden, "invisible": (e.get("invisible", false) is bool and e.invisible) or (e.get("visible", true) is bool and not e.visible),
-		"template": e.get("template", false) is bool and e.template, "tags": tags, "behaviors": []}
+		"hidden": e.get("hidden", false) is bool and e.get("hidden", false), "invisible": (e.get("invisible", false) is bool and e.get("invisible", false)) or (e.get("visible", true) is bool and not e.get("visible", true)),
+		"template": e.get("template", false) is bool and e.get("template", false), "tags": tags, "behaviors": []}
 	out.pos[1] = clampf(out.pos[1], -10, 120)
 	var bs = e.get("behaviors", e.get("behaviours", e.get("behavior", [])))
 	if bs is Dictionary or bs is String:
@@ -414,7 +414,7 @@ static func _clean_beh(b, half: float) -> Dictionary:
 			o.target = tgt
 			o.speed = _r(_n(b.get("speed", 3), 0.3, 20, 3))
 			o.range = _r(_n(b.get("range", 0), 0, 300, 0))
-			o.fly = b.get("fly", false) is bool and b.fly
+			o.fly = b.get("fly", false) is bool and b.get("fly", false)
 			o.distance = _r(_n(b.get("distance", 0 if t == "chase" else 3), 0, 30, 0))
 		"flee":
 			o.target = tgt
@@ -439,10 +439,10 @@ static func _clean_beh(b, half: float) -> Dictionary:
 			o.count = int(_n(b.get("count", 1), 1, 6, 1))
 		"damage":
 			o.amount = int(_n(b.get("amount", b.get("damage", 1)), 0, 20, 1))
-			o.kill = b.get("kill", false) is bool and b.kill
+			o.kill = b.get("kill", false) is bool and b.get("kill", false)
 			o.knock = _r(_n(b.get("knock", b.get("push", 0)), 0, 40, 0))
 			o.target = tgt
-			o.die = b.get("die", false) is bool and b.die
+			o.die = b.get("die", false) is bool and b.get("die", false)
 		"bounce":
 			o.power = _r(_n(b.get("power", 18), 5, 45, 18))
 		"boost":
@@ -491,7 +491,7 @@ static func _clean_trigger(t: Dictionary, half: float) -> Dictionary:
 	if acts.is_empty():
 		return {}
 	return {"on": on, "target": _s(t.get("target", t.get("id", "")), 40), "by": _s(t.get("by", "player"), 40).to_lower(),
-		"value": _r(_n(t.get("value", t.get("count", t.get("seconds", 0))), 0, 9999, 0)), "once": not (t.get("once", true) is bool and not t.once), "do": acts}
+		"value": _r(_n(t.get("value", t.get("count", t.get("seconds", 0))), 0, 9999, 0)), "once": not (t.get("once", true) is bool and not t.get("once", true)), "do": acts}
 
 
 ## Entities whose id is name, or that carry tag name, in spec order (templates included).
@@ -516,6 +516,7 @@ static func from_level(lv: Dictionary) -> Dictionary:
 	var i := 0
 	var skies := ["day", "sunset", "night", "candy", "storm"]
 	var has_coin := false
+	var spins := 0
 	for p in lv.get("parts", []):
 		if not (p is Array) or p.size() < 9:
 			continue
@@ -532,10 +533,13 @@ static func from_level(lv: Dictionary) -> Dictionary:
 				e.mat = "glow"
 				e.behaviors.append({"type": "bounce", "power": 19})
 			"spinner":
-				e.behaviors.append({"type": "rotate", "speed": 92})
+				e.behaviors.append({"type": "rotate", "speed": 92 if spins % 2 == 0 else -109})   # 1.6 / -1.9 rad/s like 0.7
+				spins += 1
 				e.behaviors.append({"type": "damage", "amount": 0, "knock": 14})
 			"mover":
-				e.behaviors.append({"type": "move", "path": [pos, [pos[0] + 4.0 * sin(deg_to_rad(float(p[7]))), pos[1], pos[2] + 4.0 * cos(deg_to_rad(float(p[7])))]], "speed": 3})
+				# Same track as 0.7 StudioPlay: 4 m each way along (cos r, 0, -sin r), eased.
+				var ax := [cos(deg_to_rad(float(p[7]))) * 4.0, -sin(deg_to_rad(float(p[7]))) * 4.0]
+				e.behaviors.append({"type": "move", "path": [[pos[0] - ax[0], pos[1], pos[2] - ax[1]], [pos[0] + ax[0], pos[1], pos[2] + ax[1]]], "speed": 2.8})
 			"coin":
 				e.shape = "star"
 				e.solid = false

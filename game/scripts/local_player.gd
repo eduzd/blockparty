@@ -18,6 +18,7 @@ var respawn_at := Protocol.SPAWN
 var min_y := Protocol.MIN_Y
 var speed_mult := 1.0
 var jump_velocity := Protocol.JUMP_VELOCITY
+var gravity_mult := 1.0            # 0.8.0 spec games: world gravity
 var _shape: CollisionShape3D
 
 
@@ -65,7 +66,7 @@ func _physics_process(delta: float) -> void:
 		if jump_pressed:
 			velocity.y = jump_velocity * gravity_sign
 	else:
-		velocity.y -= Protocol.GRAVITY * gravity_sign * delta
+		velocity.y -= Protocol.GRAVITY * gravity_mult * gravity_sign * delta
 	jump_pressed = false
 	move_and_slide()
 	# Trampoline floor: the ground (not the pad or blocks) launches you upward.

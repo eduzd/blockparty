@@ -82,10 +82,10 @@ static func reach_model(s: Dictionary) -> Dictionary:
 			var sa := sin(a)
 			for ix in range(maxi(0, int((r[0] + half) / cs)), mini(n, int((r[1] + half) / cs) + 1)):
 				for iz in range(maxi(0, int((r[2] + half) / cs)), mini(n, int((r[3] + half) / cs) + 1)):
-					var px := -half + (ix + 0.5) * cs - e.pos[0]
-					var pz := -half + (iz + 0.5) * cs - e.pos[2]
-					var lx := px * ca - pz * sa
-					var lz := px * sa + pz * ca
+					var px: float = -half + (ix + 0.5) * cs - e.pos[0]
+					var pz: float = -half + (iz + 0.5) * cs - e.pos[2]
+					var lx: float = px * ca - pz * sa
+					var lz: float = px * sa + pz * ca
 					if e.shape in ["sphere", "cylinder", "tree", "rock", "tower", "barrel", "turret", "cone"]:
 						if Vector2(lx, lz).length() <= maxf(e.size[0], e.size[2]) / 2.0 + 0.2:
 							blocked[ix * n + iz] = 1
@@ -223,7 +223,7 @@ static func problems(s: Dictionary) -> Array:
 				p.append("Action spawn uses template '%s', which does not exist." % str(a.get("template", "")))
 	# win condition
 	var w: Dictionary = s.rules.win
-	var enemies := s.entities.filter(func(e): return e.tags.has("enemy"))
+	var enemies: Array = s.entities.filter(func(e): return e.tags.has("enemy"))
 	match w.type:
 		"reach":
 			var t := PloxSpec.find(s, w.target)
@@ -259,7 +259,7 @@ static func problems(s: Dictionary) -> Array:
 				p.append("The win is '%s' but there are no enemies. Add enemies (chase + destructible) or rules.waves with an enemy template." % w.type)
 			if w.type == "waves" and s.rules.waves.is_empty():
 				p.append("The win is 'waves' but rules.waves is empty. Add 3 to 6 waves that grow in size.")
-			var beatable := s.player.abilities.has("shoot") or s.world.floor != "ground" or s.entities.any(func(e): var sb = PloxSpec.beh(e, "shoot"); return sb != null and sb.target != "player")
+			var beatable: bool = s.player.abilities.has("shoot") or s.world.floor != "ground" or s.entities.any(func(e): var sb = PloxSpec.beh(e, "shoot"); return sb != null and sb.target != "player")
 			if not beatable:
 				p.append("The player has no way to defeat the enemies. Give the player the 'shoot' ability (and the enemies 'destructible'), or make it a push-off over a void.")
 			for e in enemies:
@@ -352,7 +352,7 @@ static func mechanics(s: Dictionary, prompt: String) -> Array:
 	var p := []
 	var ents: Array = _placed(s)
 	var ab: Array = s.player.abilities
-	var enemies := s.entities.filter(func(e): return e.tags.has("enemy"))
+	var enemies: Array = s.entities.filter(func(e): return e.tags.has("enemy"))
 	var any_beh := func(t: String) -> bool: return s.entities.any(func(e): return PloxSpec.beh(e, t) != null)
 	var car := _has(w, [" car", "kart", "drive", "driving", "vehicle", "truck", "racing car", "race car", "motorbike", "bike race"])
 	var race := _has(w, ["race", "racing", " lap", "laps"]) and not _has(w, ["obby race", "parkour race", "foot race", "running race"])
