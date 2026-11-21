@@ -26,3 +26,9 @@ Next, in order:
 3. studio_pages.gd/main.gd: play spec games with SpecPlay; convert old levels with PloxSpec.from_level.
 4. Headless tests (godot --headless) for each recipe; then live tests with 10 prompts (tests/live_ai_prompts.js pattern).
 5. Commit own files only (git add -p), pull/rebase, push, Render manual deploy, live checks, export APK versionCode 11 / 0.8.0, Gofile.
+
+## Progress (step-1 run, Nov 21)
+- Compiles now: plox_spec.gd, plox_spec_check.gd, plox_spec_ai.gd (parse fixes). from_level movers/spinners match 0.7 timing (cosine ease, 1.6/-1.9 rad/s).
+- New: game/scripts/spec_props.gd (SpecProps: shared materials, bottom-centre looks + collision for every spec shape, burst particles). local_player.gd: gravity_mult.
+- game/tests/cc.gd: headless compile check (run the editor once with --editor --quit after adding class_name files).
+- NOT written yet: game/scripts/spec_play.gd (runtime). Design decided: Ent records; StaticBody/AnimatableBody (moving solids, cosine-eased pingpong)/CharacterBody actors (layer 4, nav flow field on 1-2 m grid for chasers in mazes)/RigidBody for push; touch tests by local AABB; LocalPlayer for platformer/side/topdown/firstperson, own arcade car for vehicle; projectiles pooled (cap 48) with auto-aim; waves; laps with start gate moved last + next-gate beacon; triggers/actions; Sky & Ink HUD pills, intro card, win/lose panel; finished signal same as StudioPlay. Then tests/spec_bot.gd autopilot + 6 sample specs.
