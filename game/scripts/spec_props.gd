@@ -401,3 +401,20 @@ func burst(parent: Node, pos: Vector3, c: Color, amount := 22, power := 6.0) -> 
 	p.global_position = pos
 	p.emitting = true
 	p.finished.connect(p.queue_free)
+
+
+## Plux 0.8.0 races: a glowing down-arrow and ring that hover over the next checkpoint.
+func build_beacon(parent: Node3D, c: Color) -> Node3D:
+	var root := Node3D.new()
+	root.name = "Beacon"
+	parent.add_child(root)
+	var m := mat(c, "plain", 2.2)
+	_mi(root, cyl(0.0, 0.9, 1.3, 4), m, Vector3(0, 0.0, 0), Vector3(PI, 0, 0), false)
+	_mi(root, cyl(0.28, 0.28, 1.2, 8), m, Vector3(0, 1.2, 0), Vector3.ZERO, false)
+	var ring := TorusMesh.new()
+	ring.inner_radius = 2.2
+	ring.outer_radius = 2.5
+	ring.rings = 32
+	ring.ring_segments = 6
+	_mi(root, ring, mat(c, "plain", 1.6), Vector3(0, -3.2, 0), Vector3.ZERO, false)
+	return root
