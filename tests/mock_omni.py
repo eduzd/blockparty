@@ -38,6 +38,21 @@ class H(BaseHTTPRequestHandler):
         msgs = body.get("messages", [])
         last = msgs[-1]["content"] if msgs else ""
         content = '{"ok": true}' if "Reply with exactly this JSON" in last else json.dumps(LEVEL)
+        # 0.8.0: spec-format requests get one of the sample spec games, picked by the prompt.
+        if "game spec" in (msgs[0]["content"] if msgs and isinstance(msgs[0]["content"], str) else ""):
+            first = msgs[0]["content"].lower()
+            req = first[first.rfind("=== the player"):] if "=== the player" in first else first[-600:]
+            name = "candy_coins"
+            for k, v in (("race", "volcano_race"), ("zombie", "zombie_graveyard"), ("sumo", "sumo_shrink"), ("maze", "ghost_maze"), ("ghost", "ghost_maze")):
+                if k in req:
+                    name = v
+                    break
+            spec = json.load(open("../game/tests/specs/%s.json" % name))
+            if "unwinnable" in req and "has these problems" not in last:
+                spec["rules"]["win"] = {"type": "score", "value": 500}
+            if "nevercar" in req:
+                spec["controls"] = "platformer"
+            content = json.dumps(spec)
         model = str(body.get("model", ""))
         retry = "could not be used" in last
         lv = json.dumps(LEVEL, indent=2)

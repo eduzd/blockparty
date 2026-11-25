@@ -32,10 +32,10 @@ var _play_after_load := false
 var _map: StudioMap
 var _games_asked := -10000
 
-const EXAMPLES := ["A lava obby with jump pads", "An ice tower up to the sky", "A candy course full of stars",
-	"Spinning hammers at night", "An easy course for little kids", "A long, hard parkour race"]
-const CHANGES := ["Make it harder", "Add lava", "Add stars", "Add jump pads", "Make it night",
-	"Add moving platforms", "Add checkpoints", "Make it easier", "Add hammers", "Make it icy"]
+const EXAMPLES := ["A 3-lap car race around a volcano", "Zombie waves in a graveyard", "Collect 20 coins before time runs out",
+	"Escape a ghost in a maze", "Sumo on a shrinking platform", "A lava obby with spinning hammers"]
+const CHANGES := ["Make it harder", "Make it easier", "Make it night", "Add more enemies", "Add a time limit",
+	"Add coins to collect"]
 
 
 func _init(shell: AppShell) -> void:
@@ -51,7 +51,7 @@ func _on_reply(t: String, msg: Dictionary) -> void:
 			busy = ""
 			if msg.get("ok", false):
 				_remember()
-				level = PloxLevel.clean(msg.get("level"), PloxLevel.MAX_PARTS_HARD)
+				level = _clean_any(msg.get("level"))
 				sel = -1
 				ai_left = int(msg.get("left", -1))
 				note = str(msg.get("why", ""))
@@ -104,12 +104,12 @@ func _on_reply(t: String, msg: Dictionary) -> void:
 					s._toast("Published! Friends can play it now." + (" +%d Plux" % got if got > 0 else ""))
 				else:
 					s._toast("Saved")
-				s.social.request({"t": "s_studio_mine"})
+				s.social.request({"t": "s_studio_mine", "spec": 1})
 			else:
 				s._toast(str(msg.get("why", "Couldn't save.")))
 			s._mark_dirty()
 		"s_studio_delete_res":
-			s.social.request({"t": "s_studio_mine"})
+			s.social.request({"t": "s_studio_mine", "spec": 1})
 		"s_game_res":
 			if busy != "load":
 				return
@@ -119,7 +119,7 @@ func _on_reply(t: String, msg: Dictionary) -> void:
 				s._mark_dirty()
 				return
 			var card: Dictionary = msg.get("game", {})
-			var lv := PloxLevel.clean(msg.get("level"), PloxLevel.MAX_PARTS_HARD)
+			var lv := _clean_any(msg.get("level"))
 			if str(card.get("owner", "")) == s.social.uid and not _play_after_load:
 				level = lv
 				gid = str(card.gid)
@@ -143,6 +143,45 @@ func _on_reply(t: String, msg: Dictionary) -> void:
 		"s_game_done_res":
 			if int(msg.get("got", 0)) > 0:
 				s._toast("+%d Plux for finishing!" % int(msg.got))
+
+
+## 0.8.0: AI games come in the spec format (any genre); hand-made levels stay obby levels.
+func _is_spec() -> bool:
+	return PloxSpec.is_spec(level)
+
+
+func _clean_any(lv) -> Dictionary:
+	if PloxSpec.is_spec(lv):
+		var sp := PloxSpec.clean(lv, PloxSpec.MAX_HARD)
+		sp.erase("_notes")
+		return sp
+	return PloxLevel.clean(lv, PloxLevel.MAX_PARTS_HARD)
+
+
+const _CONTROL_NAMES := {"platformer": "Run and jump", "topdown": "Top-down", "side": "Side view", "firstperson": "First person", "vehicle": "Driving"}
+const _WIN_NAMES := {"reach": "reach the goal", "score": "score %d", "laps": "finish %d laps", "survive": "survive %d seconds",
+	"defeat_all": "beat every enemy", "waves": "survive every wave", "collect_all": "collect everything", "trigger": "complete the goal"}
+
+
+func _spec_blurb() -> String:
+	var win: Dictionary = level.rules.win
+	var w: String = _WIN_NAMES.get(str(win.type), "win")
+	if w.contains("%d"):
+		var v := int(win.value)
+		if str(win.type) == "laps":
+			v = maxi(1, int(level.rules.laps))
+		w = w % v
+	var bits := [str(_CONTROL_NAMES.get(str(level.controls), "Run and jump")), "Win: " + w]
+	if int(level.rules.timer) > 0:
+		bits.append("%d s timer" % int(level.rules.timer))
+	if not level.rules.waves.is_empty():
+		bits.append("%d waves" % level.rules.waves.size())
+	if int(level.player.lives) > 0:
+		bits.append("%d lives" % int(level.player.lives))
+	if not level.player.abilities.is_empty():
+		bits.append(", ".join(PackedStringArray(level.player.abilities)).replace("_", " "))
+	bits.append("%d objects" % level.entities.size())
+	return "  ·  ".join(PackedStringArray(bits))
 
 
 func _remember() -> void:
@@ -188,7 +227,7 @@ func build_from_words(text: String) -> void:
 		s._offline_toast()
 		return
 	_open_after_ai = true
-	_ask({"t": "s_ai_build", "prompt": text}, "ai")
+	_ask({"t": "s_ai_build", "prompt": text, "spec": 1}, "ai")
 
 
 func change_with_words(text: String) -> void:
@@ -199,10 +238,14 @@ func change_with_words(text: String) -> void:
 	if not s.social.is_online():
 		s._offline_toast()
 		return
-	_ask({"t": "s_ai_build", "prompt": text, "base": level}, "ai")
+	_ask({"t": "s_ai_build", "prompt": text, "base": level, "spec": 1}, "ai")
 
 
 func play_current() -> void:
+	if _is_spec():
+		# 0.8.0: spec games were checked on the server (winnable, matches the prompt).
+		s.main.play_studio(level, str(level.title), true, "")
+		return
 	var problem := PloxLevel.check(level)
 	if problem != "":
 		s._toast(problem)
@@ -221,7 +264,7 @@ func _save(publish: bool) -> void:
 func studio_screen() -> Control:
 	var page := UiKit.pinned_page("Studio", s.pop)
 	var content: VBoxContainer = page[1]
-	s.social.request({"t": "s_studio_mine"})
+	s.social.request({"t": "s_studio_mine", "spec": 1})
 	content.add_child(UiKit.margin(UiKit.label("Make a game", "headline_small", UiKit.c("on_surface"), false), 20, 12, 20, 0))
 	content.add_child(UiKit.margin(UiKit.label("Say what you want. Studio builds it, then you play it straight away.",
 		"body_medium", UiKit.c("on_surface_variant")), 20, 4, 20, 12))
@@ -237,7 +280,7 @@ func studio_screen() -> Control:
 		go.disabled = busy != ""
 		if busy == "ai":
 			box.add_child(UiKit.margin(UiKit.empty_state("sparkles", "Building your game...",
-				"The AI is planning and building your course, then checking it can be finished. This can take up to a minute."), 16, 12, 16, 0))
+				"The AI is planning and building your game, then checking it can be won and matches what you asked for. This can take a minute or two."), 16, 12, 16, 0))
 		_error_card(box)
 		if not ai_on:
 			box.add_child(UiKit.margin(UiKit.empty_state("sparkles", "AI not set up yet",
@@ -273,7 +316,7 @@ func studio_screen() -> Control:
 				var id := str(g.gid)
 				var st: String = {"pub": "Published", "hidden": "Hidden by a moderator", "removed": "Removed"}.get(str(g.status), "Draft")
 				card[1].add_child(UiKit.setting_row("cube", str(g.title), "%s  ·  %d plays  ·  %d likes" % [st, int(g.plays), int(g.likes)], "",
-					UiKit.SKY_MEDIUM, func(): _ask({"t": "s_studio_get", "gid": id}, "load")))
+					UiKit.SKY_MEDIUM, func(): _ask({"t": "s_studio_get", "gid": id, "spec": 1}, "load")))
 		box.add_child(UiKit.end_padding()))
 	return page[0]
 
@@ -336,6 +379,45 @@ func _fill_editor(box: VBoxContainer) -> void:
 	if ai_left >= 0:
 		box.add_child(UiKit.margin(UiKit.label("%d AI builds left today" % ai_left, "body_small", UiKit.c("on_surface_variant")), 20, 6, 20, 0))
 
+	if _is_spec():
+		# 0.8.0: spec games are changed with words for now; the hand editor is for obby levels.
+		box.add_child(UiKit.section_title("About this game"))
+		box.add_child(UiKit.margin(UiKit.label(_spec_blurb(), "body_medium", UiKit.c("on_surface_variant")), 20, 0, 20, 4))
+		if str(level.get("intro", "")) != "":
+			box.add_child(UiKit.margin(UiKit.label(str(level.intro), "body_small", UiKit.c("on_surface_variant")), 20, 4, 20, 0))
+		var urow := _flow()
+		var uc := UiKit.chip("Undo last change", false, func():
+			if not undo.is_empty():
+				level = undo.pop_back()
+				sel = -1
+				s._mark_dirty())
+		uc.disabled = undo.is_empty()
+		urow.add_child(uc)
+		box.add_child(UiKit.margin(urow, 16, 10, 16, 0))
+	else:
+		_fill_hand(box)
+
+	# Save and publish
+	box.add_child(UiKit.section_title("Share"))
+	var st := "Published: friends and everyone on Plux can play it." if status == "pub" else ("Hidden by a moderator." if status == "hidden" else "Not published yet.")
+	box.add_child(UiKit.margin(UiKit.label(st, "body_medium", UiKit.c("on_surface_variant")), 20, 0, 20, 8))
+	var save := UiKit.outline_button("Saving..." if busy == "save" else "Save", "check", func(): _save(false))
+	save.disabled = busy != ""
+	box.add_child(UiKit.margin(save, 16, 4, 16, 0))
+	var pub := UiKit.primary_button("Publishing..." if busy == "publish" else ("Update published game" if status == "pub" else "Publish for friends"), "globe-alt", func(): _save(true))
+	pub.disabled = busy != ""
+	box.add_child(UiKit.margin(pub, 16, 10, 16, 0))
+	if gid != "":
+		var id := gid
+		box.add_child(UiKit.margin(UiKit.outline_button("Delete game", "trash", func():
+			s.social.request({"t": "s_studio_delete", "gid": id})
+			gid = ""
+			s._toast("Game deleted")
+			s.pop()), 16, 10, 16, 0))
+	box.add_child(UiKit.end_padding())
+
+
+func _fill_hand(box: VBoxContainer) -> void:
 	# By hand
 	box.add_child(UiKit.section_title("Change it by hand"))
 	box.add_child(UiKit.margin(UiKit.label("Tap a part to pick it, drag to move it. Green is the start, gold is the finish.",
@@ -388,25 +470,6 @@ func _fill_editor(box: VBoxContainer) -> void:
 	box.add_child(UiKit.margin(row, 16, 12, 16, 0))
 	box.add_child(UiKit.margin(UiKit.label("%d of %d parts" % [level.parts.size(), int(s.social.cfg.get("studio_max_parts", 160))],
 		"body_small", UiKit.c("on_surface_variant")), 20, 6, 20, 0))
-
-	# Save and publish
-	box.add_child(UiKit.section_title("Share"))
-	var st := "Published: friends and everyone on Plux can play it." if status == "pub" else ("Hidden by a moderator." if status == "hidden" else "Not published yet.")
-	box.add_child(UiKit.margin(UiKit.label(st, "body_medium", UiKit.c("on_surface_variant")), 20, 0, 20, 8))
-	var save := UiKit.outline_button("Saving..." if busy == "save" else "Save", "check", func(): _save(false))
-	save.disabled = busy != ""
-	box.add_child(UiKit.margin(save, 16, 4, 16, 0))
-	var pub := UiKit.primary_button("Publishing..." if busy == "publish" else ("Update published game" if status == "pub" else "Publish for friends"), "globe-alt", func(): _save(true))
-	pub.disabled = busy != ""
-	box.add_child(UiKit.margin(pub, 16, 10, 16, 0))
-	if gid != "":
-		var id := gid
-		box.add_child(UiKit.margin(UiKit.outline_button("Delete game", "trash", func():
-			s.social.request({"t": "s_studio_delete", "gid": id})
-			gid = ""
-			s._toast("Game deleted")
-			s.pop()), 16, 10, 16, 0))
-	box.add_child(UiKit.end_padding())
 
 
 func _edit(fn: Callable) -> void:
@@ -477,7 +540,7 @@ func discover_section(content: VBoxContainer) -> void:
 	content.add_child(UiKit.section_title("Made on Plux"))
 	if not games_loaded and Time.get_ticks_msec() - _games_asked > 5000:
 		_games_asked = Time.get_ticks_msec()
-		s.social.request({"t": "s_games", "sort": games_sort})
+		s.social.request({"t": "s_games", "sort": games_sort, "spec": 1})
 	var sorts := _flow()
 	for pair in [["popular", "Popular"], ["new", "New"], ["friends", "Friends"]]:
 		var key: String = pair[0]
@@ -485,12 +548,12 @@ func discover_section(content: VBoxContainer) -> void:
 			games_sort = key
 			games_loaded = false
 			games = []
-			s.social.request({"t": "s_games", "sort": key})
+			s.social.request({"t": "s_games", "sort": key, "spec": 1})
 			s._mark_dirty()))
 	content.add_child(UiKit.margin(sorts, 16, 0, 16, 8))
 	if games.is_empty():
 		var sub := "Loading..." if not games_loaded else ("Nothing from friends yet. Make the first one!" if games_sort == "friends" else "No games yet. Be the first to make one!")
-		content.add_child(UiKit.margin(UiKit.empty_state("cube", "Community games", sub, UiKit.small_button("Create", true, func(): s.push({"k": "studio"}), "plus")), 16, 0, 16, 0))
+		content.add_child(UiKit.margin(UiKit.empty_state("cube", "Community games", sub), 16, 0, 16, 0))
 		return
 	var card: Array = UiKit.card()
 	content.add_child(card[0])
@@ -509,7 +572,7 @@ func discover_section(content: VBoxContainer) -> void:
 		h.add_child(like)
 		var play := UiKit.small_button("Play", true, func():
 			_play_after_load = true
-			_ask({"t": "s_game_get", "gid": id}, "load"), "play")
+			_ask({"t": "s_game_get", "gid": id, "spec": 1}, "load"), "play")
 		play.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		h.add_child(play)
 		card[1].add_child(UiKit.margin(h, 16, 10, 16, 10))

@@ -184,8 +184,10 @@ func load_from(data: Dictionary) -> void:
 		sold[str(r.item)] = maxi(int(sold.get(str(r.item), 0)) + (0 if int(r.serial) > 0 else 1), int(r.serial))
 	for r in data.get("games", []):
 		var lv = JSON.parse_string(str(r.data))
+		# 0.8.0: games made in the new spec format stay specs (old obby levels stay levels).
+		var gd: Dictionary = _clean_spec(lv) if PloxSpec.is_spec(lv) else PloxLevel.clean(lv, PloxLevel.MAX_PARTS_HARD)
 		games[str(r.gid)] = {"gid": str(r.gid), "owner": str(r.owner), "title": str(r.title),
-			"data": PloxLevel.clean(lv, PloxLevel.MAX_PARTS_HARD), "status": str(r.status), "featured": _truthy(r.featured),
+			"data": gd, "status": str(r.status), "featured": _truthy(r.featured),
 			"plays": int(r.plays), "likes": int(r.likes), "created": int(r.created), "updated": int(r.updated), "paid": _truthy(r.paid)}
 	for r in data.get("likes", []):
 		if not likes.has(str(r.gid)):
@@ -607,7 +609,7 @@ func handle(cid: int, me: String, msg: Dictionary, rid, now: int) -> String:
 		"s_studio_mine":
 			var out := []
 			for gid in games:
-				if games[gid].owner == me and games[gid].status != "removed":
+				if games[gid].owner == me and games[gid].status != "removed" and (msg.get("spec", 0) or not is_spec_game(games[gid])):
 					out.append(_game_card(games[gid], me))
 			out.sort_custom(func(a, b): return int(a.updated) > int(b.updated))
 			# 0.7.1: Studio says plainly when the AI builder isn't set up yet.
@@ -620,6 +622,9 @@ func handle(cid: int, me: String, msg: Dictionary, rid, now: int) -> String:
 			var g: Dictionary = games[gid]
 			if g.owner != me and g.status != "pub":
 				reply.call({"t": "s_game_res", "ok": false, "why": "hidden"})
+				return ""
+			if is_spec_game(g) and not msg.get("spec", 0):
+				reply.call({"t": "s_game_res", "ok": false, "why": "update"})
 				return ""
 			reply.call({"t": "s_game_res", "ok": true, "game": _game_card(g, me), "level": g.data})
 		"s_studio_save", "s_studio_publish":
@@ -634,7 +639,7 @@ func handle(cid: int, me: String, msg: Dictionary, rid, now: int) -> String:
 				_db("update plox_games set status = 'deleted' where gid = $1", [gid])
 			reply.call({"t": "s_studio_delete_res", "ok": true, "gid": gid})
 		"s_games":
-			reply.call({"t": "s_games_res", "sort": str(msg.get("sort", "popular")), "games": _discover(me, str(msg.get("sort", "popular")))})
+			reply.call({"t": "s_games_res", "sort": str(msg.get("sort", "popular")), "games": _discover(me, str(msg.get("sort", "popular")), bool(msg.get("spec", 0)))})
 		"s_game_played":
 			var gid := str(msg.get("gid", ""))
 			if not games.has(gid) or games[gid].status != "pub":
@@ -801,20 +806,42 @@ func _buy(me: String, id: String, now: int) -> Dictionary:
 	return res
 
 
+## 0.8.0: a cleaned spec (game spec v1) without the cleaner's notes.
+## AI answers are held to 90 entries; saved games are already expanded, so up to MAX_HARD.
+func _clean_spec(raw, entries := PloxSpec.MAX_HARD) -> Dictionary:
+	var s := PloxSpec.clean(raw, entries)
+	s.erase("_notes")
+	return s
+
+
+static func is_spec_game(g: Dictionary) -> bool:
+	return PloxSpec.is_spec(g.get("data"))
+
+
 func _game_card(g: Dictionary, viewer: String) -> Dictionary:
 	var o: Dictionary = hub.users.get(g.owner, {})
-	return {"gid": g.gid, "title": g.title, "owner": g.owner, "owner_name": str(o.get("name", "Player")),
+	var spec := is_spec_game(g)
+	var card := {"gid": g.gid, "title": g.title, "owner": g.owner, "owner_name": str(o.get("name", "Player")),
 		"owner_av": int(o.get("av", -1)), "status": g.status, "featured": g.featured, "plays": int(g.plays),
-		"likes": int(g.likes), "liked": likes.get(g.gid, {}).has(viewer), "parts": g.data.parts.size(),
-		"sky": int(g.data.sky), "updated": int(g.updated)}
+		"likes": int(g.likes), "liked": likes.get(g.gid, {}).has(viewer),
+		"parts": PloxSpec.card_parts(g.data) if spec else g.data.parts.size(),
+		"sky": PloxSpec.card_sky(g.data) if spec else int(g.data.sky), "updated": int(g.updated)}
+	if spec:
+		card["spec"] = 1
+		card["genre"] = str(g.data.get("plan", {}).get("genre", "")).substr(0, 30)
+		card["controls"] = str(g.data.get("controls", ""))
+	return card
 
 
-func _discover(me: String, sort: String) -> Array:
+func _discover(me: String, sort: String, spec_ok := false) -> Array:
 	var list := []
 	var my_friends: Dictionary = hub.friends.get(me, {})
 	for gid in games:
 		var g: Dictionary = games[gid]
 		if g.status != "pub":
+			continue
+		# 0.8.0: 0.7.2 phones can only play obby levels, so they never see spec games.
+		if not spec_ok and is_spec_game(g):
 			continue
 		if sort == "friends" and not my_friends.has(g.owner):
 			continue
@@ -833,8 +860,13 @@ func _discover(me: String, sort: String) -> Array:
 func _save_game(me: String, msg: Dictionary, now: int, publish: bool) -> Dictionary:
 	var res := {"t": "s_studio_save_res", "ok": false, "why": "", "published": false}
 	var gid := str(msg.get("gid", ""))
-	var level := PloxLevel.clean(msg.get("level"), cfg.i("studio_max_parts"))
+	# 0.8.0: a 0.8.0 phone saves AI games in the spec format; 0.7.2 phones save obby levels.
+	var spec := PloxSpec.is_spec(msg.get("level"))
+	var level: Dictionary = _clean_spec(msg.get("level")) if spec else PloxLevel.clean(msg.get("level"), cfg.i("studio_max_parts"))
 	level.title = filter_text(level.title)
+	if gid != "" and games.has(gid) and games[gid].owner == me and is_spec_game(games[gid]) and not spec:
+		res.why = "This game was made with a newer Plux. Update the app to change it."
+		return res
 	if gid != "" and (not games.has(gid) or games[gid].owner != me):
 		res.why = "That game isn't yours."
 		return res
@@ -858,7 +890,13 @@ func _save_game(me: String, msg: Dictionary, now: int, publish: bool) -> Diction
 	g.title = level.title
 	g.updated = now
 	if publish:
-		var problem := PloxLevel.check(level)
+		var problem := ""
+		if spec:
+			var sp := PloxSpecCheck.problems(level)
+			if not sp.is_empty():
+				problem = "This game can't be won yet: " + str(sp[0]).substr(0, 160)
+		else:
+			problem = PloxLevel.check(level)
 		if problem != "":
 			res.why = problem
 			res["gid"] = gid
@@ -1009,8 +1047,17 @@ func _ai_build(me: String, msg: Dictionary, reply: Callable, now: int) -> void:
 	var started := Time.get_ticks_msec()
 	# 0.7.0: "make it harder", "add lava": change the game already on screen.
 	var change := {}
+	# 0.8.0: a 0.8.0 phone says spec 1 and gets a game in the spec format (any genre);
+	# 0.7.2 phones say nothing and keep getting obby levels exactly as before.
+	var want_spec := bool(msg.get("spec", 0))
 	if msg.get("base") is Dictionary:
-		change = PloxLevel.clean(msg.base, cfg.i("studio_max_parts"))
+		if want_spec:
+			change = _clean_spec(msg.base) if PloxSpec.is_spec(msg.base) else PloxSpec.from_level(PloxLevel.clean(msg.base, cfg.i("studio_max_parts")))
+		else:
+			change = PloxLevel.clean(msg.base, cfg.i("studio_max_parts"))
+	var over := {"agent": ag}
+	if want_spec:
+		over["spec"] = true
 	_ai_call(prompt, func(ok: bool, level: Dictionary, why: String):
 		_ai_busy[me] = int(_ai_busy.get(me, 1)) - 1
 		if int(_ai_busy[me]) <= 0:
@@ -1021,7 +1068,7 @@ func _ai_build(me: String, msg: Dictionary, reply: Callable, now: int) -> void:
 		_ai_note(me, ("[edit] " if not change.is_empty() else "") + prompt, ok, ms, info if ok else why)
 		if ok:
 			level.title = filter_text(str(level.title))
-			reply.call({"t": "s_ai_res", "ok": true, "level": level, "source": "ai", "ms": ms,
+			reply.call({"t": "s_ai_res", "ok": true, "level": level, "source": "ai", "ms": ms, "spec": 1 if want_spec else 0, "info": info,
 				"why": "Built by the AI in %.0f seconds." % (ms / 1000.0),
 				"left": _ai_left(me)})
 		else:
@@ -1031,7 +1078,7 @@ func _ai_build(me: String, msg: Dictionary, reply: Callable, now: int) -> void:
 				count("ai:" + me, -1)
 			reply.call({"t": "s_ai_res", "ok": false, "retry": true, "source": "ai", "ai_error": _player_ai_reason(why),
 				"why": "The AI couldn't build this game: %s. Try again." % _player_ai_reason(why),
-				"left": _ai_left(me)}), false, {"agent": ag}, change)
+				"left": _ai_left(me)}), false, over, change)
 
 
 ## A short, player-friendly reason (never the URL or anything private).
@@ -1048,6 +1095,8 @@ static func _player_ai_reason(why: String) -> String:
 		return "the AI address is wrong"
 	if why.contains("can't be finished"):
 		return "its course couldn't be finished, even after fixing"
+	if why.contains("can't be won"):
+		return "its game couldn't be won, even after fixing: " + why.get_slice("won after", 1).get_slice(": ", 1).substr(0, 140)
 	if why.contains("empty answer"):
 		return "the AI sent back an empty answer"
 	return "its answer wasn't a game it could build"
@@ -1085,8 +1134,19 @@ func _ai_call(prompt: String, done: Callable, test := false, override := {}, cha
 		done.call(false, {}, "no model name saved")
 		return
 	var messages := []
+	var spec := bool(override.get("spec", false)) and not test
 	if test:
 		messages = [{"role": "user", "content": "Reply with exactly this JSON and nothing else: {\"ok\": true}"}]
+	elif spec:
+		# 0.8.0: the any-genre game spec. Instructions go in the user message (routers drop system).
+		var ssys := PloxSpecAi.system_prompt(mini(cfg.i("studio_max_parts"), 90))
+		var srules := AgentRules.compose(ag) if not ag.is_empty() else ""
+		if srules.strip_edges() != "":
+			ssys += "\n\nRules from the Plux team for you (%s). Follow them, but always reply in the game spec JSON format above:\n%s" % [str(ag.get("name", "")), srules]
+		if not change.is_empty() and change.get("entities", []).size() > 0:
+			messages = [{"role": "user", "content": PloxSpecAi.edit_message(ssys, prompt, change)}]
+		else:
+			messages = [{"role": "user", "content": PloxSpecAi.user_message(ssys, prompt)}]
 	else:
 		var sys := PloxLevel.ai_system_prompt(mini(cfg.i("studio_max_parts"), 90))
 		var rules_txt := AgentRules.compose(ag) if not ag.is_empty() else ""
@@ -1101,7 +1161,7 @@ func _ai_call(prompt: String, done: Callable, test := false, override := {}, cha
 				+ "\n\nChange it like this: " + prompt \
 				+ "\nChange ONLY what I asked. Keep every other part exactly as it is (same kind, position, size, rotation and colour), keep the title unless I asked to rename it, and keep it finishable. " \
 				+ "In the plan, list just the changes you made. Reply with the whole updated game in the same JSON format, JSON only."
-	var st := {"try": 1, "t0": Time.get_ticks_msec(), "prompt": prompt if not test else "", "edit": not change.is_empty()}
+	var st := {"try": 1, "t0": Time.get_ticks_msec(), "prompt": prompt if not test else "", "edit": not change.is_empty(), "spec": spec}
 	_ai_try(url, model, key, messages, test, ag, done, st)
 
 
@@ -1142,6 +1202,9 @@ func _ai_try(url: String, model: String, key: String, messages: Array, test: boo
 	http.body_size_limit = 4 * 1024 * 1024
 	add_child(http)
 	var tokens := 400 if test else cfg.i("ai_max_tokens")
+	if st.get("spec", false):
+		tokens = maxi(tokens, 16000)   # a spec game is bigger than an obby level
+		http.timeout = maxf(http.timeout, 150.0)
 	var body := {"model": model, "messages": messages, "max_tokens": tokens, "temperature": 0.4 if int(st.try) > 1 else 0.7, "stream": false}
 	if not st.get("plain", false):
 		# Thinking models spent the whole budget thinking and wrote nothing; ask them to think less.
@@ -1152,7 +1215,7 @@ func _ai_try(url: String, model: String, key: String, messages: Array, test: boo
 		"User-Agent: PluxServer/0.7.2", "ngrok-skip-browser-warning: true",
 		"HTTP-Referer: https://github.com/eduzd/blockparty", "X-Title: Plux"])
 	var retry := func(why: String, bad_reply: String) -> bool:
-		if int(st.try) >= 2 or test or Time.get_ticks_msec() - int(st.t0) > 150000:
+		if int(st.try) >= 2 or test or Time.get_ticks_msec() - int(st.t0) > (200000 if st.get("spec", false) else 150000):
 			return false
 		print("[ai] try %d failed (%s), trying again" % [int(st.try), why])
 		st.try = 2
@@ -1160,7 +1223,7 @@ func _ai_try(url: String, model: String, key: String, messages: Array, test: boo
 		var m2: Array = messages.duplicate(true)
 		if bad_reply.strip_edges() != "":
 			m2.append({"role": "assistant", "content": bad_reply.substr(0, 1200)})
-		m2.append({"role": "user", "content": PloxLevel.AI_RETRY_NOTE})
+		m2.append({"role": "user", "content": PloxSpecAi.RETRY_NOTE if st.get("spec", false) else PloxLevel.AI_RETRY_NOTE})
 		_ai_try(url, model, key, m2, test, ag, done, st)
 		return true
 	var fail := func(why: String, bad_reply: String, can_retry: bool):
@@ -1169,7 +1232,7 @@ func _ai_try(url: String, model: String, key: String, messages: Array, test: boo
 		if st.has("best"):
 			# A fix attempt went wrong, but an earlier answer was a finishable game: use that.
 			var bl: Dictionary = st.best
-			bl["_info"] = "AI, %d parts, kept the earlier version (fix failed: %s)" % [bl.parts.size(), why.substr(0, 80)]
+			bl["_info"] = "AI, %d %s, kept the earlier version (fix failed: %s)" % [bl.get("entities", bl.get("parts", [])).size(), "entities" if st.get("spec", false) else "parts", why.substr(0, 80)]
 			print("[ai] fix failed (%s), using the earlier finishable level" % why)
 			done.call(true, bl, "")
 			return
@@ -1184,7 +1247,7 @@ func _ai_try(url: String, model: String, key: String, messages: Array, test: boo
 		http.queue_free()
 		if result != HTTPRequest.RESULT_SUCCESS:
 			if result == HTTPRequest.RESULT_TIMEOUT:
-				fail.call("no answer within %d seconds" % cfg.i("ai_timeout_s"), "", false)
+				fail.call("no answer within %d seconds" % (int(maxf(float(cfg.i("ai_timeout_s")), 150.0)) if st.get("spec", false) else cfg.i("ai_timeout_s")), "", false)
 			elif result == HTTPRequest.RESULT_BODY_SIZE_LIMIT_EXCEEDED:
 				fail.call("the answer was too big", "", true)
 			else:
@@ -1229,6 +1292,9 @@ func _ai_try(url: String, model: String, key: String, messages: Array, test: boo
 			var to = PloxAi.find_level(content)
 			print("[ai] test ok in %d ms" % (Time.get_ticks_msec() - int(st.t0)))
 			done.call(true, {"_info": "model replied: " + PloxAi.preview(content, 60) + ("" if to is Dictionary else " (not JSON)")}, "")
+			return
+		if st.get("spec", false):
+			_ai_spec_answer(content, r, url, model, key, messages, ag, done, st, fail)
 			return
 		var obj = PloxAi.find_level(content)
 		if not (obj is Dictionary):
@@ -1290,6 +1356,62 @@ func _ai_try(url: String, model: String, key: String, messages: Array, test: boo
 	if err != OK:
 		http.queue_free()
 		fail.call("request failed to start (%d)" % err, "", false)
+
+
+## 0.8.0: reads a spec-format answer, checks it can be won (PloxSpecCheck.problems) and
+## that it really is what the player asked for (PloxSpecCheck.mechanics), and sends the
+## AI up to two lists of fixes. Keeps the best winnable version seen; never makes a game
+## itself. done(ok, spec, why) like the level path; spec["_info"] says how it went.
+func _ai_spec_answer(content: String, r: Dictionary, url: String, model: String, key: String, messages: Array,
+		ag: Dictionary, done: Callable, st: Dictionary, fail: Callable) -> void:
+	var obj = PloxSpecAi.find_spec(content)
+	if not (obj is Dictionary):
+		fail.call("answer was not game JSON (finish %s): %s" % [r.finish if r.finish != "" else "none", PloxAi.preview(content, 140)], content, true)
+		return
+	var raw_n := 0
+	var src = obj.get("entities", obj.get("objects", []))
+	if src is Array:
+		raw_n = src.size()
+	var spec := _clean_spec(obj, mini(cfg.i("studio_max_parts"), 90))
+	if not ag.is_empty():
+		spec = PloxSpecCheck.enforce_agent(spec, ag)
+	if spec.entities.size() < 3:
+		fail.call("too few usable objects (%d of %d): %s" % [spec.entities.size(), raw_n, PloxAi.preview(content, 100)], content, true)
+		return
+	var probs: Array = PloxSpecCheck.problems(spec)
+	var mech: Array = []
+	if str(st.get("prompt", "")) != "" and not st.get("edit", false):
+		mech = PloxSpecCheck.mechanics(spec, str(st.prompt))
+	if probs.is_empty() and (not st.has("best") or mech.size() <= int(st.get("best_mech", 99))):
+		st["best"] = spec.duplicate(true)
+		st["best_mech"] = mech.size()
+		st["best_left"] = mech.duplicate()
+	var all: Array = probs + mech
+	var fixes := int(st.get("fixes", 0))
+	if not all.is_empty():
+		var elapsed := Time.get_ticks_msec() - int(st.t0)
+		if fixes < 2 and elapsed < 200000:
+			st["fixes"] = fixes + 1
+			st["fix_why"] = str(all[0]).substr(0, 200)
+			print("[ai] spec has %d problem(s), asking the AI to fix them (%d): %s" % [all.size(), fixes + 1, str(all[0]).substr(0, 160)])
+			var m3: Array = messages.duplicate(true)
+			m3.append({"role": "assistant", "content": JSON.stringify(obj)})
+			m3.append({"role": "user", "content": PloxSpecAi.repair_note(all)})
+			_ai_try(url, model, key, m3, false, ag, done, st)
+			return
+		if not st.has("best"):
+			fail.call("the AI's game still can't be won after %d fixes: %s" % [fixes, str(all[0]).substr(0, 220)], "", false)
+			return
+		spec = st.best
+		mech = st.get("best_left", [])
+	var info := "AI spec, %s, %s, win %s, %d entities%s%s%s%s" % [str(spec.controls), str(spec.get("plan", {}).get("genre", "")).substr(0, 24),
+		str(spec.rules.win.type), spec.entities.size(), ", 2nd try" if int(st.try) > 1 else "",
+		(", fixed %dx" % int(st.fixes)) if int(st.get("fixes", 0)) > 0 else "",
+		(", still missing: " + str(mech[0]).substr(0, 120)) if not mech.is_empty() else "",
+		", cut off and closed" if r.finish == "length" else ""]
+	print("[ai] spec ok in %d ms: %s, '%s'" % [Time.get_ticks_msec() - int(st.t0), info, str(spec.title)])
+	spec["_info"] = info
+	done.call(true, spec, "")
 
 
 # ------------------------------------------------------------------ admin

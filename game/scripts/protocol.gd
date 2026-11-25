@@ -5,8 +5,8 @@ extends RefCounted
 
 const VERSION := 1
 ## The app build number (Android versionCode). The server can require a minimum one.
-const APP_BUILD := 9
-const SERVER_VERSION := "0.7.2"
+const APP_BUILD := 11
+const SERVER_VERSION := "0.8.0"
 const DEFAULT_PORT := 8910
 const DEFAULT_ROOM := "PLAY"
 
@@ -15,6 +15,7 @@ const MAX_ROOMS := 50
 const MAX_CONNECTIONS := 200
 const MAX_MESSAGE_BYTES := 1024
 const MAX_SIGNAL_BYTES := 8192       # voice offers/answers (SDP) are a few KB
+const MAX_STUDIO_BYTES := 98304      # 0.8.0: a Studio save or AI change with a whole spec game
 const MAX_SIGNALS_PER_SEC := 80      # ICE candidates arrive in bursts
 const MAX_SDP_CHARS := 7000
 const MAX_ICE_CHARS := 600

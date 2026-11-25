@@ -28,7 +28,7 @@ signal trades_changed                             # a trade offer arrived or cha
 signal banned(text: String)
 
 ## App version code (export_presets version/code). The server can ask older apps to update.
-const APP_VERSION := 10
+const APP_VERSION := 11
 var cfg := LiveConfig.DEFAULTS.duplicate(true)
 var eco := {"coins": 0, "eq": [], "inv": [], "daily_ready": false, "daily": 0}
 var shop: Array = []
@@ -174,7 +174,7 @@ func _open() -> void:
 		return
 	_ws = WebSocketPeer.new()
 	_ws.inbound_buffer_size = 262144
-	_ws.outbound_buffer_size = 65536
+	_ws.outbound_buffer_size = 262144
 	_welcomed = false
 	_hello_sent = false
 	if _ws.connect_to_url(url) != OK:

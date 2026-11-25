@@ -1283,7 +1283,7 @@ func _on_invite_in(inv: Dictionary) -> void:
 
 
 # ------------------------------------------------------------------ 0.7.0 Studio play
-var studio_play: StudioPlay
+var studio_play: Node3D   # StudioPlay for 0.7 obby levels, SpecPlay for 0.8.0 spec games
 var _studio_gid := ""
 
 ## Plays a Studio level on this phone. From the editor (can_edit) the pencil goes back to it.
@@ -1295,7 +1295,11 @@ func play_studio(level: Dictionary, title: String, can_edit: bool, gid: String) 
 	# background stayed on top of the 3D world, so Studio games showed a blank page.
 	if menu_layer and is_instance_valid(menu_layer):
 		menu_layer.visible = false
-	studio_play = StudioPlay.new()
+	# 0.8.0: AI games in the spec format play on the new game player (any genre).
+	if PloxSpec.is_spec(level):
+		studio_play = SpecPlay.new()
+	else:
+		studio_play = StudioPlay.new()
 	var col := Color("#335FFF")
 	studio_play.setup(level, title, can_edit, str(social.data.get("name", "You")), col)
 	studio_play.finished.connect(_on_studio_finished)

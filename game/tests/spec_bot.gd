@@ -34,6 +34,18 @@ func _initialize() -> void:
 func _run() -> void:
 	var only: Array = OS.get_cmdline_user_args()
 	var fails := 0
+	# 0.8.0 step 2: SPEC_FILES=/a.json,/b.json plays AI-made games (live prompts): the
+	# autopilot plays, then stands still; each run must end in a win or a loss.
+	var extra := OS.get_environment("SPEC_FILES")
+	if extra != "":
+		var lim := float(OS.get_environment("SPEC_LIMIT")) if OS.get_environment("SPEC_LIMIT") != "" else 240.0
+		for f in extra.split(","):
+			for how in ["play", "idle"]:
+				if not await _case(f, how, "any", lim):
+					fails += 1
+		print("SPEC_BOT DONE fails=%d" % fails)
+		quit(1 if fails > 0 else 0)
+		return
 	for c in CASES:
 		if not only.is_empty() and not only.has(str(c[0]).get_basename()):
 			continue
@@ -45,10 +57,10 @@ func _run() -> void:
 
 
 func _load(file: String) -> Dictionary:
-	var raw = JSON.parse_string(FileAccess.get_file_as_string("res://tests/specs/" + file))
+	var raw = JSON.parse_string(FileAccess.get_file_as_string(file if file.begins_with("/") else "res://tests/specs/" + file))
 	if raw is Dictionary and raw.has("parts"):
 		return PloxSpec.from_level(PloxLevel.clean(raw))   # a 0.7 obby, converted like the server will
-	var s := PloxSpec.clean(raw)                 # same limits as an AI game
+	var s := PloxSpec.clean(raw, PloxSpec.MAX_HARD if file.begins_with("/") else 90)   # saved games are already expanded
 	s.erase("_notes")
 	return s
 
@@ -89,7 +101,7 @@ func _case(file: String, how: String, want: String, limit: float) -> bool:
 	var got := "none"
 	if game.done:
 		got = "win" if game.won else "lose"
-	var ok := got == want
+	var ok := got == want or (want == "any" and got != "none")
 	print("RESULT %s %s: %s (%s) after %.1f s, score %d, lives %d, toasts %s -> %s" % [file, how, got, game.result_reason, game.elapsed, game.score, game.lives, str(notes), "PASS" if ok else "FAIL"])
 	root.remove_child(game)
 	game.free()

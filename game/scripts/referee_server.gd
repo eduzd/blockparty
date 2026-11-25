@@ -147,8 +147,8 @@ func _accept_new(now: int) -> void:
 			conn.disconnect_from_host()
 			continue
 		var ws := WebSocketPeer.new()
-		ws.inbound_buffer_size = 16384
-		ws.outbound_buffer_size = 65536
+		ws.inbound_buffer_size = 131072   # 0.8.0: Studio sends spec games (tens of KB)
+		ws.outbound_buffer_size = 196608  # 0.8.0: spec games go out whole
 		if ws.accept_stream(conn) == OK:
 			_pending.append({"ws": ws, "since": now})
 
@@ -209,12 +209,16 @@ func _poll_closing(now: int) -> void:
 
 func _handle_packet(c: Dictionary, pkt: PackedByteArray, is_text: bool, now: int) -> void:
 	var id: int = c.id
-	if pkt.size() > Protocol.MAX_SIGNAL_BYTES:
+	if pkt.size() > Protocol.MAX_STUDIO_BYTES:
 		_kick(id, "too_big", "Message too large")
 		return
-	var msg = Protocol.decode(pkt.get_string_from_utf8(), Protocol.MAX_SIGNAL_BYTES) if is_text else null
+	var msg = Protocol.decode(pkt.get_string_from_utf8(), Protocol.MAX_STUDIO_BYTES) if is_text else null
 	if msg == null:
 		_bad(c, "bad_message")
+		return
+	# 0.8.0: only Studio saves and AI changes may carry a whole game (spec games are big).
+	if pkt.size() > Protocol.MAX_SIGNAL_BYTES and not (msg.t in ["s_studio_save", "s_studio_publish", "s_ai_build"]):
+		_kick(id, "too_big", "Message too large")
 		return
 	var is_signal: bool = msg.t == "vsig"
 	var is_social := SocialHub.is_social(msg.t)

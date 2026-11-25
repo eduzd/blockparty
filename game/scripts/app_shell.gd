@@ -883,7 +883,7 @@ func join_playing(pl: Dictionary) -> void:
 	var kind := str(pl.get("kind", pl.get("what", "")))
 	if kind == "game" and str(pl.get("gid", "")) != "":
 		studio._play_after_load = true
-		studio._ask({"t": "s_game_get", "gid": str(pl.gid)}, "load")
+		studio._ask({"t": "s_game_get", "gid": str(pl.gid), "spec": 1}, "load")
 	elif str(pl.get("room", "")) != "":
 		main.join_friend_room(kind, str(pl.room))
 

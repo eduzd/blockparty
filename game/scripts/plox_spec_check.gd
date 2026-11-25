@@ -300,8 +300,14 @@ static func _score_available(s: Dictionary, m: Dictionary) -> int:
 			total += int(d.score)
 		if PloxSpec.beh(e, "spawn") != null:
 			return -1
-	if not s.rules.waves.is_empty():
-		return -1
+	# Waves are counted: each wave's enemies are worth their template's score (step 2).
+	for wv in s.rules.waves:
+		var tl := PloxSpec.find(s, str(wv.template))
+		if tl.is_empty():
+			continue
+		var dd = PloxSpec.beh(tl[0], "destructible")
+		var cc = PloxSpec.beh(tl[0], "collect")
+		total += int(wv.count) * (int(dd.score) if dd != null else 0) + int(wv.count) * (int(cc.score) if cc != null else 0)
 	for t in s.triggers:
 		for a in t.do:
 			if a.act == "score" and str(a.get("team", "")) != "enemy":
